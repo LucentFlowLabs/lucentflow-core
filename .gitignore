@@ -1,0 +1,126 @@
+# IDE Files
+.idea/
+.vscode/
+.windsurf/
+*.swp
+*.swo
+*~
+
+# Maven Build Files
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+
+# Local Configuration Files (CRITICAL - Exclude private keys and local settings)
+application-local.yml
+application-local.yaml
+application-local.properties
+application-dev.yml
+application-dev.yaml
+application-dev.properties
+local.properties
+*.key
+*.pem
+*.p12
+*.jks
+keystore/
+certificates/
+private/
+
+# Logs and Runtime Files
+*.log
+logs/
+*.out
+*.err
+
+# Database Files
+*.db
+*.h2.db
+*.h2.db.mv.db
+*.sqlite
+*.sqlite3
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.cache
+.cache/
+
+# Node.js (if any frontend tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Spring Boot Specific
+spring-boot-*.log
+application.pid
+
+# Docker
+.dockerignore
+
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Coverage Reports
+coverage/
+*.lcov
+
+# SonarQube
+.sonar/
+
+# JRebel
+rebel.xml
+
+# IntelliJ
+*.iml
+*.ipr
+*.iws
+
+# Eclipse
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# VS Code
+.vscode/
+
+
+# Security testing artifacts
+*test-key*
+*test-secret*
+config/secrets/
+# Local database locks
+*.lock
