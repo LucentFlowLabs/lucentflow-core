@@ -1,0 +1,55 @@
+spring:
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:postgresql://localhost:5432/lucentflow
+    username: admin
+    password: lucentflow_pwd
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      connection-timeout: 30000
+      initialization-fail-timeout: 60000
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc:
+          batch_size: 50
+          order_inserts: true
+          order_updates: true
+  task:
+    execution:
+      pool:
+        core-size: 8
+        max-size: 16
+        queue-capacity: 100
+    scheduling:
+      pool:
+        size: 4
+  main:
+    banner-mode: off
+  lifecycle:
+    timeout:
+      startup: 60s
+      shutdown: 30s
+
+lucentflow:
+  chain:
+    rpc-url: https://mainnet.base.org
+
+logging:
+  level:
+    com.lucentflow: DEBUG
+    okhttp3: INFO
+    org.web3j: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
