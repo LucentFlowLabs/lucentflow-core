@@ -19,6 +19,9 @@ import jakarta.annotation.PostConstruct;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.context.event.EventListener;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.annotation.DependsOn;
 
 /**
  * High-performance blockchain poller for transaction extraction and pipeline feeding.
@@ -35,6 +38,7 @@ import java.util.Optional;
  */
 @Slf4j
 @Component
+@DependsOn("flyway")
 public class BaseBlockPoller {
     
     private final Web3j web3j;
@@ -53,7 +57,17 @@ public class BaseBlockPoller {
     /**
      * Initialize last scanned block from database.
      */
-    @PostConstruct
+    @EventListener(ApplicationReadyEvent.class)
+    public void onApplicationReady() {
+        log.info("LucentFlow core signaled READY. Initializing synchronization state...");
+        try {
+            initializeLastScannedBlock();
+        } catch (Exception e) {
+            log.error("Failed to initialize block height. Pipeline will retry on next schedule.", e);
+            // Do not throw exception here, let the app stay alive
+        }
+    }
+    
     public void initializeLastScannedBlock() {
         try {
             Optional<SyncStatus> latestStatus = syncStatusRepository.findFirstByOrderByIdDesc();

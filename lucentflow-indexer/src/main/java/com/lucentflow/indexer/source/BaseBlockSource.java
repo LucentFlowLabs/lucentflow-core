@@ -19,6 +19,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import org.springframework.context.event.EventListener;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.annotation.DependsOn;
 
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
@@ -34,6 +37,7 @@ import io.github.resilience4j.core.functions.CheckedSupplier;
  */
 @Slf4j
 @Component
+@DependsOn("flyway")
 public class BaseBlockSource {
     
     private final Web3j web3j;
@@ -75,7 +79,12 @@ public class BaseBlockSource {
     
     private Long lastScannedBlock;
     
-    @PostConstruct
+    @EventListener(ApplicationReadyEvent.class)
+    public void onApplicationReady() {
+        log.info("System signaled READY. Initializing block height from database...");
+        initializeLastScannedBlock();
+    }
+    
     public void initializeLastScannedBlock() {
         try {
             Optional<SyncStatus> latestStatus = syncStatusRepository.findFirstByOrderByIdDesc();
@@ -94,8 +103,9 @@ public class BaseBlockSource {
                 syncStatusRepository.save(initialStatus);
             }
         } catch (Exception e) {
-            log.error("Failed to initialize last scanned block", e);
-            throw new RuntimeException("Initialization failed", e);
+            log.error("Failed to initialize last scanned block - database may not be ready yet", e);
+            // Don't throw exception - let the application start and retry later
+            lastScannedBlock = 0L; // Default fallback
         }
     }
     

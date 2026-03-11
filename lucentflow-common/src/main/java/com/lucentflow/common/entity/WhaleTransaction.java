@@ -19,11 +19,11 @@ import java.time.Instant;
 @Entity
 @Table(name = "whale_transactions", 
        indexes = {
-           @Index(name = "idx_from_address", columnList = "from_address"),
-           @Index(name = "idx_to_address", columnList = "to_address"),
-           @Index(name = "idx_block_number", columnList = "block_number"),
-           @Index(name = "idx_timestamp", columnList = "timestamp"),
-           @Index(name = "idx_value_eth", columnList = "value_eth")
+           @Index(name = "idx_wt_from_address", columnList = "from_address"),
+           @Index(name = "idx_wt_to_address", columnList = "to_address"),
+           @Index(name = "idx_wt_block_number", columnList = "block_number"),
+           @Index(name = "idx_wt_timestamp", columnList = "timestamp"),
+           @Index(name = "idx_wt_value_eth", columnList = "value_eth")
        })
 @Getter
 @Setter
@@ -42,7 +42,7 @@ public class WhaleTransaction {
     @Column(name = "from_address", nullable = false, length = 42)
     private String fromAddress;
 
-    @Column(name = "to_address", length = 42)
+    @Column(name = "to_address", nullable = true, length = 42)
     private String toAddress;
 
     @Column(name = "value_eth", nullable = false, precision = 38, scale = 18)
@@ -102,7 +102,7 @@ public class WhaleTransaction {
         // Auto-detect contract creation if toAddress is null
         if (toAddress == null || toAddress.trim().isEmpty()) {
             isContractCreation = true;
-            // Keep toAddress null for contract creations
+            // toAddress remains null for contract deployments
         }
     }
 

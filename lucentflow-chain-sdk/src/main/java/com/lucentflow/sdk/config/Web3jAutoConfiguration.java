@@ -3,6 +3,7 @@ package com.lucentflow.sdk.config;
 import okhttp3.ConnectionPool;
 import okhttp3.Dispatcher;
 import okhttp3.OkHttpClient;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -31,6 +32,7 @@ import java.util.concurrent.TimeUnit;
  * @author ArchLucent
  * @since 1.0
  */
+@Slf4j
 @Configuration
 @EnableAsync
 @EnableConfigurationProperties(Web3jAutoConfiguration.Web3jProperties.class)
@@ -46,19 +48,20 @@ public class Web3jAutoConfiguration {
     @Bean
     public ScheduledExecutorService web3jExecutorService() {
         try {
-            // Java 21+ virtual thread implementation using reflection
-            Object threadBuilder = Thread.class.getMethod("ofVirtual").invoke(null);
-            Object namedBuilder = threadBuilder.getClass().getMethod("name", String.class, int.class)
-                    .invoke(threadBuilder, "web3j-poller-", 0);
-            ThreadFactory threadFactory = (ThreadFactory) namedBuilder.getClass().getMethod("factory").invoke(namedBuilder);
-            return Executors.newSingleThreadScheduledExecutor(threadFactory);
+            // Java 21+ virtual thread implementation
+            ScheduledExecutorService executor = Executors.newScheduledThreadPool(1, 
+                Thread.ofVirtual().name("web3j-scheduler-", 0).factory());
+            log.info("Web3j virtual thread executor initialized successfully");
+            return executor;
         } catch (Exception e) {
             // Fallback to traditional threads for Java < 21
-            return Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "web3j-poller-0");
+            ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "web3j-scheduler-0");
                 t.setDaemon(true);
                 return t;
             });
+            log.warn("Web3j falling back to traditional thread executor: {}", e.getMessage());
+            return executor;
         }
     }
 

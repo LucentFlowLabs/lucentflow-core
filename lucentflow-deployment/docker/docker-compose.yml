@@ -45,13 +45,13 @@ services:
     container_name: lucentflow-metabase
     restart: always
     environment:
-      MB_DB_TYPE: pg
+      MB_DB_TYPE: postgres
       MB_DB_DBNAME: lucentflow
       MB_DB_HOST: postgres
       MB_DB_PORT: 5432
       MB_DB_USER: admin
       MB_DB_PASS: lucentflow_pwd
-      MB_DB_SSLMODE: require
+      MB_DB_SSLMODE: disable
       MB_ENABLE_METRICS: true
       MB_SITE_URL: http://localhost:3000
       MB_SITE_NAME: LucentFlow Dashboard
@@ -75,6 +75,8 @@ volumes:
   postgres_data:
     driver: local
   pgadmin_data:
+    driver: local
+  metabase_data:
     driver: local
 
 networks:
