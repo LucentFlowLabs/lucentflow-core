@@ -60,40 +60,45 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private void startAnalysisLoop(int workerId) {
         log.info("Analyzer-Worker-{} (Virtual Thread) started.", workerId);
         
-        while (!Thread.currentThread().isInterrupted()) {
-            try {
-                // T10 Optimization: Polling with batch drain instead of one-by-one take()
-                List<Transaction> rawBatch = transactionPipe.drainBatch(BATCH_SIZE);
-                
-                if (rawBatch.isEmpty()) {
-                    // Efficient waiting: pause for 100ms if no data
-                    LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(100));
-                    continue;
+        try {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    log.debug("Worker-{} polling for next batch...", workerId);
+                    List<Transaction> rawBatch = transactionPipe.drainBatch(BATCH_SIZE);
+                    
+                    if (rawBatch.isEmpty()) {
+                        // Efficient waiting: pause for 100ms if no data
+                        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(100));
+                        continue;
+                    }
+
+                    // Process batch in memory
+                    List<WhaleTransaction> whaleBatch = rawBatch.stream()
+                            .map(this::processAndFilterWhale)
+                            .filter(Objects::nonNull)
+                            .toList();
+
+                    if (!whaleBatch.isEmpty()) {
+                        // Massive performance gain: SQL Batch Insert
+                        whaleDatabaseSink.saveWhaleTransactions(whaleBatch);
+                        whaleCount.addAndGet(whaleBatch.size());
+                    }
+
+                    processedCount.addAndGet(rawBatch.size());
+                    
+                    if (processedCount.get() % 1000 < BATCH_SIZE) {
+                        log.info("[STATUS] Analyzer throughput: {} processed, {} whales detected.", 
+                                processedCount.get(), whaleCount.get());
+                    }
+
+                } catch (Exception e) {
+                    errorCount.incrementAndGet();
+                    log.error("Critical error in Analyzer-Worker-{}: {}", workerId, e.getMessage());
                 }
-
-                // Process batch in memory
-                List<WhaleTransaction> whaleBatch = rawBatch.stream()
-                        .map(this::processAndFilterWhale)
-                        .filter(Objects::nonNull)
-                        .toList();
-
-                if (!whaleBatch.isEmpty()) {
-                    // Massive performance gain: SQL Batch Insert
-                    whaleDatabaseSink.saveWhaleTransactions(whaleBatch);
-                    whaleCount.addAndGet(whaleBatch.size());
-                }
-
-                processedCount.addAndGet(rawBatch.size());
-                
-                if (processedCount.get() % 1000 < BATCH_SIZE) {
-                    log.info("[STATUS] Analyzer throughput: {} processed, {} whales detected.", 
-                            processedCount.get(), whaleCount.get());
-                }
-
-            } catch (Exception e) {
-                errorCount.incrementAndGet();
-                log.error("Critical error in Analyzer-Worker-{}: {}", workerId, e.getMessage());
             }
+        } catch (Throwable t) {
+            log.error("[WORKER-CRASH] Analyzer-Worker-{} crashed with exception", workerId, t);
+            log.error("[WORKER-CRASH] Stack trace:", t);
         }
     }
 

@@ -32,15 +32,13 @@ public class TransactionPipe {
      */
     public void push(Transaction tx) throws InterruptedException {
         if (tx == null) return;
-
-        // Try to offer with a 5s timeout to detect if consumers are stalling
-        boolean accepted = queue.offer(tx, 5, TimeUnit.SECONDS);
         
-        if (!accepted) {
-            backpressureEvents.incrementAndGet();
-            log.warn("[BACKPRESSURE] Pipe is FULL (size: {}). Producer is now stalling...", queue.size());
-            // Strict blocking put: No data loss, but producer slows down to consumer's speed
-            queue.put(tx); 
+        int attempt = 0;
+        while (!queue.offer(tx, 1, TimeUnit.SECONDS)) {
+            attempt++;
+            if (attempt % 5 == 0) { // Log every 5 seconds of waiting
+                log.warn("[STALL-ALERT] Producer waiting {}s for pipe space. Size: {}", attempt, queue.size());
+            }
         }
         
         totalProcessed.incrementAndGet();

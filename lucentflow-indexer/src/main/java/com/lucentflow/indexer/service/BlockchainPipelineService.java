@@ -183,8 +183,11 @@ public class BlockchainPipelineService {
                     try {
                         log.debug("[THREAD-{}] Processing block {}", threadIndex, blockNumber);
                         
-                        // Process individual block
-                        EthBlock.Block block = blockSource.fetchBlock(blockNumber);
+                        // Process individual block with hard timeout to prevent hangs
+                        CompletableFuture<EthBlock.Block> blockFuture = CompletableFuture.supplyAsync(() -> 
+                            blockSource.fetchBlock(blockNumber));
+                        
+                        EthBlock.Block block = blockFuture.orTimeout(10, TimeUnit.SECONDS).get();
                         if (block == null) {
                             log.warn("[THREAD-{}] Block {} fetch failed or timed out", threadIndex, blockNumber);
                             return;
