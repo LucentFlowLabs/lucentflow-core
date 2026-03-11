@@ -18,6 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import jakarta.annotation.PreDestroy;
 
 /**
  * Spring Boot auto-configuration for Web3j with Java 21 virtual thread integration.
@@ -37,6 +38,8 @@ import java.util.concurrent.TimeUnit;
 @EnableAsync
 @EnableConfigurationProperties(Web3jAutoConfiguration.Web3jProperties.class)
 public class Web3jAutoConfiguration {
+    
+    private ScheduledExecutorService web3jExecutorService;
 
     /**
      * Creates a ScheduledExecutorService using Java 21 virtual threads for Web3j polling.
@@ -52,6 +55,7 @@ public class Web3jAutoConfiguration {
             ScheduledExecutorService executor = Executors.newScheduledThreadPool(1, 
                 Thread.ofVirtual().name("web3j-scheduler-", 0).factory());
             log.info("Web3j virtual thread executor initialized successfully");
+            this.web3jExecutorService = executor; // Store reference for shutdown
             return executor;
         } catch (Exception e) {
             // Fallback to traditional threads for Java < 21
@@ -61,7 +65,27 @@ public class Web3jAutoConfiguration {
                 return t;
             });
             log.warn("Web3j falling back to traditional thread executor: {}", e.getMessage());
+            this.web3jExecutorService = executor; // Store reference for shutdown
             return executor;
+        }
+    }
+    
+    @PreDestroy
+    public void shutdownExecutor() {
+        if (web3jExecutorService != null && !web3jExecutorService.isShutdown()) {
+            log.info("Gracefully shutting down Web3j executor service");
+            web3jExecutorService.shutdown();
+            try {
+                if (!web3jExecutorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                    log.warn("Web3j executor did not terminate gracefully within 10 seconds, forcing shutdown");
+                    web3jExecutorService.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                log.warn("Interrupted while waiting for Web3j executor termination");
+                Thread.currentThread().interrupt();
+                web3jExecutorService.shutdownNow();
+            }
+            log.info("Web3j executor service shutdown completed");
         }
     }
 

@@ -8,6 +8,7 @@ import com.lucentflow.indexer.transformer.TransactionTransformer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +40,7 @@ public class PipelineOrchestrator {
     private final TransactionTransformer transactionTransformer;
     private final WhaleDatabaseSink whaleDatabaseSink;
     private final SyncStatusRepository syncStatusRepository;
+    private final ApplicationContext applicationContext;
     private final Random random = new Random();
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;
@@ -49,11 +51,13 @@ public class PipelineOrchestrator {
     public PipelineOrchestrator(BaseBlockSource blockSource, 
                                TransactionTransformer transactionTransformer,
                                WhaleDatabaseSink whaleDatabaseSink,
-                               SyncStatusRepository syncStatusRepository) {
+                               SyncStatusRepository syncStatusRepository,
+                               ApplicationContext applicationContext) {
         this.blockSource = blockSource;
         this.transactionTransformer = transactionTransformer;
         this.whaleDatabaseSink = whaleDatabaseSink;
         this.syncStatusRepository = syncStatusRepository;
+        this.applicationContext = applicationContext;
     }
     
     /**
@@ -96,7 +100,12 @@ public class PipelineOrchestrator {
             log.info("Completed processing up to block {}", endBlock);
             
         } catch (Exception e) {
-            log.error("Error in pipeline orchestrator", e);
+            // Filter shutdown noise - don't log full stack trace during graceful shutdown
+            if (!(e instanceof InterruptedException)) {
+                log.error("Error in pipeline orchestrator", e);
+            } else {
+                log.warn("Pipeline orchestrator interrupted during shutdown: {}", e.getMessage());
+            }
         }
     }
     
@@ -115,7 +124,9 @@ public class PipelineOrchestrator {
             try {
                 processBlock(blockNum);
             } catch (Exception e) {
-                log.error("Error processing block {} sequentially", blockNum, e);
+                if (!(e instanceof InterruptedException)) {
+                    log.error("Error processing block {} sequentially", blockNum, e);
+                }
             }
         }
     }
@@ -167,7 +178,9 @@ public class PipelineOrchestrator {
                     Thread.currentThread().interrupt();
                     log.warn("Block processing interrupted for block {}", currentBlock);
                 } catch (Exception e) {
-                    log.error("Error processing block {} in parallel", currentBlock, e);
+                    if (!(e instanceof InterruptedException)) {
+                        log.error("Error processing block {} in parallel", currentBlock, e);
+                    }
                 }
             });
         }
@@ -204,8 +217,13 @@ public class PipelineOrchestrator {
             }
             
         } catch (Exception e) {
-            log.error("Failed to process block {}", blockNumber, e);
-            throw new RuntimeException("Block processing failed", e);
+            if (!(e instanceof InterruptedException)) {
+                log.error("Failed to process block {}", blockNumber, e);
+                throw new RuntimeException("Block processing failed", e);
+            } else {
+                log.warn("Block processing interrupted for block {}: {}", blockNumber, e.getMessage());
+                throw new RuntimeException("Block processing interrupted", e);
+            }
         }
     }
     
@@ -226,8 +244,13 @@ public class PipelineOrchestrator {
             syncStatusRepository.save(status);
             log.debug("Updated sync status to block {}", lastProcessedBlock);
         } catch (Exception e) {
-            log.error("Failed to update sync status for block {}", lastProcessedBlock, e);
-            throw new RuntimeException("Sync status update failed", e);
+            if (!(e instanceof InterruptedException)) {
+                log.error("Failed to update sync status for block {}", lastProcessedBlock, e);
+                throw new RuntimeException("Sync status update failed", e);
+            } else {
+                log.warn("Sync status update interrupted for block {}: {}", lastProcessedBlock, e.getMessage());
+                throw new RuntimeException("Sync status update interrupted", e);
+            }
         }
     }
     

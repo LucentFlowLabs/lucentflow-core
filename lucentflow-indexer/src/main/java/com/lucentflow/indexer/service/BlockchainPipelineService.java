@@ -74,6 +74,8 @@ public class BlockchainPipelineService {
      */
     @Scheduled(fixedDelay = 2000)
     public void scanForNewBlocks() {
+        log.info("Scanner heartbeat: checking for new blocks...");
+        
         try {
             if (web3jExecutorService.isShutdown()) {
                 log.error("CRITICAL: Web3j executor has been shut down!");

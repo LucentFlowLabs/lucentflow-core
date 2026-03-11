@@ -45,13 +45,6 @@ services:
     container_name: lucentflow-metabase
     restart: always
     environment:
-      MB_DB_TYPE: postgres
-      MB_DB_DBNAME: lucentflow
-      MB_DB_HOST: postgres
-      MB_DB_PORT: 5432
-      MB_DB_USER: admin
-      MB_DB_PASS: lucentflow_pwd
-      MB_DB_SSLMODE: disable
       MB_ENABLE_METRICS: true
       MB_SITE_URL: http://localhost:3000
       MB_SITE_NAME: LucentFlow Dashboard
@@ -59,9 +52,6 @@ services:
       - "3000:3000"
     networks:
       - lucentflow-network
-    depends_on:
-      postgres:
-        condition: service_healthy
     volumes:
       - metabase_data:/var/lib/metabase
     healthcheck:

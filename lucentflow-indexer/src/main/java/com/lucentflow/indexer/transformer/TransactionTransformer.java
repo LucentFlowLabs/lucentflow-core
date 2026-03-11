@@ -42,7 +42,7 @@ import java.time.Instant;
 @Component
 public class TransactionTransformer {
     
-    private static final BigInteger WHALE_THRESHOLD_WEI = EthUnitConverter.etherStringToWei("10");
+    private static final BigInteger WHALE_THRESHOLD_WEI = EthUnitConverter.etherStringToWei("0.01");
     
     /**
      * Transform a Web3j Transaction into a WhaleTransaction entity if it meets whale criteria.

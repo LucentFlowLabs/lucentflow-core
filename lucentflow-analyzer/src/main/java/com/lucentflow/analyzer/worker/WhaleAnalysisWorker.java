@@ -68,6 +68,7 @@ public class WhaleAnalysisWorker implements TransactionPipe.TransactionConsumer 
                                 
                             } catch (InterruptedException e) {
                                 log.info("WhaleAnalysisWorker interrupted, shutting down gracefully");
+                                Thread.currentThread().interrupt(); // Restore interrupt status
                                 break;
                             } catch (Exception e) {
                                 log.error("Unexpected error in WhaleAnalysisWorker", e);
@@ -92,6 +93,7 @@ public class WhaleAnalysisWorker implements TransactionPipe.TransactionConsumer 
                         
                     } catch (InterruptedException e2) {
                         log.info("WhaleAnalysisWorker interrupted, shutting down gracefully");
+                        Thread.currentThread().interrupt(); // Restore interrupt status
                         break;
                     } catch (Exception e2) {
                         log.error("Unexpected error in WhaleAnalysisWorker", e2);

@@ -125,7 +125,11 @@ public class BaseBlockPoller {
                 }
             }
         } catch (Exception e) {
-            log.error("Error during block polling: {}", e.getMessage(), e);
+            if (!(e instanceof InterruptedException)) {
+                log.error("Error during block polling: {}", e.getMessage(), e);
+            } else {
+                log.warn("Block polling interrupted: {}", e.getMessage());
+            }
         }
     }
     

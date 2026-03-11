@@ -90,7 +90,22 @@ public class BaseBlockSource {
             Optional<SyncStatus> latestStatus = syncStatusRepository.findFirstByOrderByIdDesc();
             if (latestStatus.isPresent()) {
                 lastScannedBlock = latestStatus.get().getLastScannedBlock();
-                log.info("Loaded last scanned block from database: {}", lastScannedBlock);
+                
+                // Genesis Trap Fix: If last_scanned_block is 0, start from current height - 10
+                if (lastScannedBlock == 0) {
+                    EthBlockNumber blockNumber = web3j.ethBlockNumber().send();
+                    long currentHeight = blockNumber.getBlockNumber().longValue();
+                    lastScannedBlock = currentHeight - 10;
+                    
+                    log.info("Genesis Trap detected: last_scanned_block was 0, starting from current height - 10: {}", lastScannedBlock);
+                    
+                    // Update the database with the new starting point
+                    SyncStatus status = latestStatus.get();
+                    status.setLastScannedBlock(lastScannedBlock);
+                    syncStatusRepository.save(status);
+                } else {
+                    log.info("Loaded last scanned block from database: {}", lastScannedBlock);
+                }
             } else {
                 // Start from current block if no history exists
                 EthBlockNumber blockNumber = web3j.ethBlockNumber().send();
