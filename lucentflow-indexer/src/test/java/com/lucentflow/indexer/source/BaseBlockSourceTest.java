@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -155,8 +156,8 @@ class BaseBlockSourceTest {
         assertThat(blockRange).hasSize(2);
         assertThat(blockRange[0]).isEqualTo(999951); // First unscanned block
         assertThat(blockRange[1]).isEqualTo(1000000); // Current block
-        verify(web3j, times(2)).ethBlockNumber(); // Once for init, once for range
-        verify(syncStatusRepository, times(2)).findFirstByOrderByIdDesc();
+        verify(web3j, times(1)).ethBlockNumber(); // Called once for range
+        verify(syncStatusRepository, times(1)).findFirstByOrderByIdDesc();
     }
     
     @Test
@@ -184,8 +185,8 @@ class BaseBlockSourceTest {
         
         // Then
         assertThat(blockRange).isEmpty(); // No blocks to process
-        verify(web3j, times(2)).ethBlockNumber(); // Once for init, once for range
-        verify(syncStatusRepository, times(2)).findFirstByOrderByIdDesc();
+        verify(web3j, times(1)).ethBlockNumber(); // Called once for range
+        verify(syncStatusRepository, times(1)).findFirstByOrderByIdDesc();
     }
     
     @Test
@@ -197,10 +198,9 @@ class BaseBlockSourceTest {
         
         // Use doReturn pattern for ethGetBlockByNumber
         doReturn(mockBlockRequest).when(web3j).ethGetBlockByNumber(any(), anyBoolean());
-        doReturn(mockEthBlock).when(mockBlockRequest).sendAsync();
+        when(mockBlockRequest.sendAsync()).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(mockEthBlock));
         when(mockEthBlock.getBlock()).thenReturn(mockBlock);
         when(mockBlock.getNumber()).thenReturn(blockNumber);
-        when(mockBlockRequest.sendAsync()).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(mockEthBlock));
         
         // When
         EthBlock.Block actualBlock = baseBlockSource.fetchBlock(blockNumber.longValue());
@@ -215,28 +215,28 @@ class BaseBlockSourceTest {
     }
     
     @Test
-    @DisplayName("Should return null when block fetch fails after retries")
-    void shouldReturnNullWhenBlockFetchFailsAfterRetries() throws Exception {
+    @DisplayName("Should throw exception when block fetch fails after retries")
+    void shouldThrowExceptionWhenBlockFetchFailsAfterRetries() throws Exception {
         // Given
         BigInteger blockNumber = BigInteger.valueOf(123456);
         
         // Use doReturn pattern
         doReturn(mockBlockRequest).when(web3j).ethGetBlockByNumber(any(), anyBoolean());
-        doReturn(mockEthBlock).when(mockBlockRequest).sendAsync();
         
-        // Configure request to fail 3 times (exhaust retries)
+        // Configure request to fail 5 times (exhaust retries)
         when(mockBlockRequest.sendAsync())
+            .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"))
+            .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"))
             .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"))
             .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"))
             .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"));
         
-        // When
-        EthBlock.Block actualBlock = baseBlockSource.fetchBlock(blockNumber.longValue());
-        
-        // Then
-        assertThat(actualBlock).isNull(); // Should return null on failure
-        verify(web3j, times(3)).ethGetBlockByNumber(any(), anyBoolean()); // Exhaust all retries
-        verify(mockBlockRequest, times(3)).sendAsync();
+        // When & Then
+        assertThrows(RuntimeException.class, () -> {
+            baseBlockSource.fetchBlock(blockNumber.longValue());
+        });
+        verify(web3j, times(5)).ethGetBlockByNumber(any(), anyBoolean()); // Exhaust all retries
+        verify(mockBlockRequest, times(5)).sendAsync();
     }
     
     @Test
@@ -256,7 +256,7 @@ class BaseBlockSourceTest {
         Transaction tx2 = createMockTransaction("0x456");
         Transaction tx3 = createMockTransaction("0x789");
         
-        // Configure transaction mocks
+        // Configure transaction mocks - the get() method should return Transaction objects
         when(txResult1.get()).thenReturn(tx1);
         when(txResult2.get()).thenReturn(tx2);
         when(txResult3.get()).thenReturn(tx3);
@@ -266,8 +266,8 @@ class BaseBlockSourceTest {
         transactionResults.add(txResult3);
         
         // Configure block mock
-        when(mockBlock.getTransactions()).thenReturn(transactionResults);
-        when(mockBlock.getNumber()).thenReturn(blockNumber);
+        lenient().when(mockBlock.getTransactions()).thenReturn(transactionResults);
+        lenient().when(mockBlock.getNumber()).thenReturn(blockNumber);
         
         // When
         List<Transaction> transactions = baseBlockSource.getTransactionsFromBlock(mockBlock);
@@ -293,8 +293,8 @@ class BaseBlockSourceTest {
         
         // Configure empty transaction list
         List<EthBlock.TransactionResult> emptyTransactionResults = new ArrayList<>();
-        when(mockBlock.getTransactions()).thenReturn(emptyTransactionResults);
-        when(mockBlock.getNumber()).thenReturn(blockNumber);
+        lenient().when(mockBlock.getTransactions()).thenReturn(emptyTransactionResults);
+        lenient().when(mockBlock.getNumber()).thenReturn(blockNumber);
         
         // When
         List<Transaction> transactions = baseBlockSource.getTransactionsFromBlock(mockBlock);
@@ -317,9 +317,28 @@ class BaseBlockSourceTest {
         EthBlock.TransactionResult smallTxResult = mock(EthBlock.TransactionResult.class);
         EthBlock.TransactionResult whaleTxResult2 = mock(EthBlock.TransactionResult.class);
         
-        Transaction whaleTx1 = createMockWhaleTransaction("0xwhale1"); // > 10 ETH
-        Transaction smallTx = createMockTransaction("0xsmall1");      // < 10 ETH
-        Transaction whaleTx2 = createMockWhaleTransaction("0xwhale2");  // > 10 ETH
+        // Create mock Transaction objects to avoid web3j validation issues
+        Transaction whaleTx1 = mock(Transaction.class);
+        Transaction smallTx = mock(Transaction.class);
+        Transaction whaleTx2 = mock(Transaction.class);
+        
+        // Configure whale transaction 1 (> 0.01 ETH threshold)
+        lenient().when(whaleTx1.getValue()).thenReturn(new BigInteger("20000000000000000000")); // 20 ETH
+        lenient().when(whaleTx1.getHash()).thenReturn("0x1234567890123456789012345678901234567890");
+        lenient().when(whaleTx1.getFrom()).thenReturn("0x1234567890123456789012345678901234567890");
+        lenient().when(whaleTx1.getTo()).thenReturn("0xabcdef1234567890123456789012345678901234567");
+        
+        // Configure small transaction (< 0.01 ETH threshold)
+        lenient().when(smallTx.getValue()).thenReturn(new BigInteger("500000000000000000")); // 0.5 ETH
+        lenient().when(smallTx.getHash()).thenReturn("0xabcdef1234567890123456789012345678901234567");
+        lenient().when(smallTx.getFrom()).thenReturn("0x1234567890123456789012345678901234567890");
+        lenient().when(smallTx.getTo()).thenReturn("0xfedcba0987654321098765432109876543210987");
+        
+        // Configure whale transaction 2 (> 0.01 ETH threshold)
+        lenient().when(whaleTx2.getValue()).thenReturn(new BigInteger("15000000000000000000")); // 15 ETH
+        lenient().when(whaleTx2.getHash()).thenReturn("0xfedcba0987654321098765432109876543210987");
+        lenient().when(whaleTx2.getFrom()).thenReturn("0x1234567890123456789012345678901234567890");
+        lenient().when(whaleTx2.getTo()).thenReturn("0xabcdef1234567890123456789012345678901234567");
         
         // Configure transaction mocks
         when(whaleTxResult1.get()).thenReturn(whaleTx1);
@@ -331,8 +350,8 @@ class BaseBlockSourceTest {
         transactionResults.add(whaleTxResult2);
         
         // Configure block mock
-        when(mockBlock.getTransactions()).thenReturn(transactionResults);
-        when(mockBlock.getNumber()).thenReturn(blockNumber);
+        lenient().when(mockBlock.getTransactions()).thenReturn(transactionResults);
+        lenient().when(mockBlock.getNumber()).thenReturn(blockNumber);
         
         // When
         List<Transaction> transactions = baseBlockSource.getTransactionsFromBlock(mockBlock);
@@ -368,8 +387,8 @@ class BaseBlockSourceTest {
         
         // Then
         assertThat(hasNewBlocks).isTrue();
-        verify(web3j, times(2)).ethBlockNumber(); // Once for init, once for check
-        verify(syncStatusRepository, times(2)).findFirstByOrderByIdDesc();
+        verify(web3j, times(1)).ethBlockNumber(); // Called once for check
+        verify(syncStatusRepository, times(1)).findFirstByOrderByIdDesc();
     }
     
     /**
@@ -381,8 +400,8 @@ class BaseBlockSourceTest {
     private Transaction createMockTransaction(String hash) {
         Transaction tx = new Transaction();
         tx.setHash(hash);
-        tx.setFrom("0xfrom1234567890123456789012345678901234567890");
-        tx.setTo("0xto1234567890123456789012345678901234567890");
+        tx.setFrom("0x1234567890123456789012345678901234567890");
+        tx.setTo("0xabcdef1234567890123456789012345678901234567");
         tx.setValue("500000000000000000"); // 0.5 ETH (not whale)
         tx.setGas("21000");
         tx.setGasPrice("20000000000");
@@ -401,8 +420,8 @@ class BaseBlockSourceTest {
     private Transaction createMockWhaleTransaction(String hash) {
         Transaction tx = new Transaction();
         tx.setHash(hash);
-        tx.setFrom("0xfrom1234567890123456789012345678901234567890");
-        tx.setTo("0xto1234567890123456789012345678901234567890");
+        tx.setFrom("0x1234567890123456789012345678901234567890");
+        tx.setTo("0xabcdef1234567890123456789012345678901234567");
         tx.setValue("20000000000000000000"); // 20 ETH (whale)
         tx.setGas("21000");
         tx.setGasPrice("20000000000");

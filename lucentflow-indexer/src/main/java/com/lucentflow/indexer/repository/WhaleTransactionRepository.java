@@ -37,6 +37,13 @@ public interface WhaleTransactionRepository extends JpaRepository<WhaleTransacti
     Optional<WhaleTransaction> findByHash(String hash);
     
     /**
+     * Check if whale transaction exists by hash (optimized for batch operations)
+     * @param hash Transaction hash
+     * @return true if exists, false otherwise
+     */
+    boolean existsByHash(String hash);
+    
+    /**
      * Find whale transactions with value greater than or equal to minimum
      * @param minValue Minimum ETH value
      * @param pageable Pagination information

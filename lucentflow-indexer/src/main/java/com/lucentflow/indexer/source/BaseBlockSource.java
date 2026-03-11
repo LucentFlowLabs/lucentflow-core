@@ -207,14 +207,23 @@ public class BaseBlockSource {
      * @return List of transactions
      */
     public List<Transaction> getTransactionsFromBlock(EthBlock.Block block) {
-        List<Transaction> transactions = block.getTransactions().stream().map(Transaction.class::cast).toList();
+        List<Transaction> transactions = block.getTransactions().stream()
+                .map(txResult -> (Transaction) txResult.get())
+                .toList();
         
         // Push whale transactions to TransactionPipe for zero-loss processing
         for (Transaction tx : transactions) {
             if (isWhaleTransaction(tx)) {
-                // Push the original Web3j Transaction to pipe (not WhaleTransaction)
-                transactionPipe.push(tx);
-                log.debug("Pushed whale transaction to pipe: {}", tx.getHash());
+                try {
+                    // Push the original Web3j Transaction to pipe (not WhaleTransaction)
+                    transactionPipe.push(tx);
+                    log.debug("Pushed whale transaction to pipe: {}", tx.getHash());
+                } catch (InterruptedException e) {
+                    log.error("Interrupt detected while pushing transaction {} to pipe. Restoring interrupt status...", tx.getHash());
+                    Thread.currentThread().interrupt(); // T10 Standard: Must restore interrupt status
+                    // Break the loop to avoid further processing when interrupted
+                    break;
+                }
             }
         }
         
