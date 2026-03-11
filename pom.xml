@@ -18,6 +18,15 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Spring Boot BOM - HIGHEST PRIORITY -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>3.4.0</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            
             <!-- SLF4J API version management - HIGHEST PRIORITY -->
             <dependency>
                 <groupId>org.slf4j</groupId>
@@ -69,7 +78,6 @@
             <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-starter-data-jpa</artifactId>
-                <version>3.4.0</version>
             </dependency>
             
             <!-- SpringDoc OpenAPI for Swagger -->
@@ -98,7 +106,6 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
-            <version>3.4.0</version>
             <scope>test</scope>
             <exclusions>
                 <exclusion>

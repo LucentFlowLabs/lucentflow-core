@@ -13,7 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -49,6 +49,7 @@ public class BlockchainPipelineService {
     
     private final BaseBlockSource blockSource;
     private final TransactionPipe transactionPipe;
+    private final ScheduledExecutorService web3jExecutorService;
     
     // Configuration constants for controlled parallelism
     private static final int CHUNK_SIZE = 10;
@@ -56,7 +57,6 @@ public class BlockchainPipelineService {
     
     // Concurrency control mechanisms
     private final Semaphore blockRequestSemaphore = new Semaphore(MAX_PARALLEL_BLOCKS);
-    private final Executor virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
     
     /**
      * Main scheduled method for blockchain scanning with controlled parallelism.
@@ -74,7 +74,14 @@ public class BlockchainPipelineService {
      */
     @Scheduled(fixedDelay = 2000)
     public void scanForNewBlocks() {
+        log.info("Scanner heartbeat: checking for new blocks...");
+        
         try {
+            if (web3jExecutorService.isShutdown()) {
+                log.error("CRITICAL: Web3j executor has been shut down!");
+                return;
+            }
+            
             if (!blockSource.hasNewBlocks()) {
                 log.debug("No new blocks to process");
                 return;
@@ -176,8 +183,11 @@ public class BlockchainPipelineService {
                     try {
                         log.debug("[THREAD-{}] Processing block {}", threadIndex, blockNumber);
                         
-                        // Process individual block
-                        EthBlock.Block block = blockSource.fetchBlock(blockNumber);
+                        // Process individual block with hard timeout to prevent hangs
+                        CompletableFuture<EthBlock.Block> blockFuture = CompletableFuture.supplyAsync(() -> 
+                            blockSource.fetchBlock(blockNumber));
+                        
+                        EthBlock.Block block = blockFuture.orTimeout(10, TimeUnit.SECONDS).get();
                         if (block == null) {
                             log.warn("[THREAD-{}] Block {} fetch failed or timed out", threadIndex, blockNumber);
                             return;
@@ -204,7 +214,7 @@ public class BlockchainPipelineService {
                 } catch (Exception e) {
                     log.error("[THREAD-{}] Error processing block {}", threadIndex, blockNumber, e);
                 }
-            }, virtualThreadExecutor));
+            }, web3jExecutorService));
         }
         
         // Wait for all futures to complete with safety timeout

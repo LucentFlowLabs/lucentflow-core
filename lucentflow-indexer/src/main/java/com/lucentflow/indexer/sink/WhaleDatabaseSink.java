@@ -4,72 +4,53 @@ import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.indexer.repository.WhaleTransactionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.concurrent.Semaphore;
+import java.util.List;
 
 /**
- * High-throughput database sink for whale transaction persistence.
+ * High-throughput PostgreSQL batch sink for whale transaction persistence.
  * 
  * <p>Implementation Details:
- * Provides async database operations with semaphore-controlled backpressure.
- * Implements duplicate detection and batch processing capabilities.
- * Thread-safe concurrent write limiting to prevent database pool exhaustion.
- * Virtual thread compatible through async execution and stateless operations.
+ * Optimized for PostgreSQL reWriteBatchedInserts=true with true batch operations.
+ * Virtual thread compatible through stateless operations and simplified concurrency.
+ * Leverages Hibernate batch_size=50 for maximum database throughput.
  * </p>
  * 
- * @author ArchLucent
+ * @author High-Performance Database Architect
  * @since 1.0
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class WhaleDatabaseSink {
     
     private final WhaleTransactionRepository whaleTransactionRepository;
-    private final Semaphore dbSemaphore;
-    
-    @Autowired
-    public WhaleDatabaseSink(WhaleTransactionRepository whaleTransactionRepository) {
-        this.whaleTransactionRepository = whaleTransactionRepository;
-        // Limit concurrent DB writes to max-pool-size - 2 (assuming pool size of 20)
-        this.dbSemaphore = new Semaphore(18); // Conservative limit to prevent pool exhaustion
-    }
     
     /**
-     * Save a whale transaction to the database using async execution with throttling.
+     * Save a whale transaction to the database (legacy method for compatibility).
      * @param whaleTransaction Whale transaction to save
      */
-    @Async("lucentTaskExecutor")
     @Transactional
     public void saveWhaleTransaction(WhaleTransaction whaleTransaction) {
-        // Acquire semaphore to limit concurrent DB writes
+        if (whaleTransaction == null) return;
+        
         try {
-            dbSemaphore.acquire();
-            try {
-                // Check if transaction already exists (avoid duplicates)
-                if (whaleTransactionRepository.findByHash(whaleTransaction.getHash()).isPresent()) {
-                    log.debug("Whale transaction {} already exists, skipping", whaleTransaction.getHash());
-                    return;
-                }
-                
-                // Save to database
-                WhaleTransaction saved = whaleTransactionRepository.save(whaleTransaction);
-                log.info("Saved whale transaction: {} ETH | {} → {} | Block: {}", 
-                        saved.getValueEth(),
-                        saved.getFromAddress(),
-                        saved.getToAddress(),
-                        saved.getBlockNumber());
-                
-            } finally {
-                // Always release semaphore
-                dbSemaphore.release();
+            // Check if transaction already exists (avoid duplicates)
+            if (whaleTransactionRepository.existsByHash(whaleTransaction.getHash())) {
+                log.debug("Whale transaction {} already exists, skipping", whaleTransaction.getHash());
+                return;
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("DB write interrupted for transaction {}", whaleTransaction.getHash());
+            
+            // Save to database
+            WhaleTransaction saved = whaleTransactionRepository.save(whaleTransaction);
+            log.info("Saved whale transaction: {} ETH | {} → {} | Block: {}", 
+                    saved.getValueEth(),
+                    saved.getFromAddress(),
+                    saved.getToAddress(),
+                    saved.getBlockNumber());
+                    
         } catch (Exception e) {
             log.error("Failed to save whale transaction {}", whaleTransaction.getHash(), e);
             throw new RuntimeException("Failed to save whale transaction", e);
@@ -77,34 +58,31 @@ public class WhaleDatabaseSink {
     }
     
     /**
-     * Save multiple whale transactions in batch.
-     * @param whaleTransactions List of whale transactions to save
-     * @return Number of successfully saved transactions
+     * Save multiple whale transactions in true PostgreSQL batch.
+     * Leverages Hibernate batch_size=50 and reWriteBatchedInserts=true for maximum throughput.
+     * @param transactions List of whale transactions to save
      */
-    @Async("lucentTaskExecutor")
     @Transactional
-    public int saveWhaleTransactionsBatch(Iterable<WhaleTransaction> whaleTransactions) {
-        int savedCount = 0;
-        
-        for (WhaleTransaction whaleTransaction : whaleTransactions) {
-            try {
-                // Check for duplicates
-                if (!whaleTransactionRepository.findByHash(whaleTransaction.getHash()).isPresent()) {
-                    WhaleTransaction saved = whaleTransactionRepository.save(whaleTransaction);
-                    savedCount++;
-                    log.debug("Saved whale transaction {} in batch", saved.getHash());
+    public void saveWhaleTransactions(List<WhaleTransaction> transactions) {
+        if (transactions == null || transactions.isEmpty()) return;
+
+        try {
+            // T10 Performance: saveAll() is required for Hibernate batching to work
+            whaleTransactionRepository.saveAll(transactions);
+            log.info("[SINK] Successfully persisted batch of {} transactions.", transactions.size());
+        } catch (Exception e) {
+            log.error("[SINK] Batch save failed. Falling back to individual persistence for error isolation...", e);
+            // Fallback to save one-by-one only on failure to identify the specific record causing issues
+            for (WhaleTransaction tx : transactions) {
+                try {
+                    if (!whaleTransactionRepository.existsByHash(tx.getHash())) {
+                        whaleTransactionRepository.save(tx);
+                    }
+                } catch (Exception ex) {
+                    log.error("[SINK] Individual save failed for hash {}: {}", tx.getHash(), ex.getMessage());
                 }
-            } catch (Exception e) {
-                log.error("Failed to save whale transaction {} in batch", whaleTransaction.getHash(), e);
-                // Continue with other transactions in batch
             }
         }
-        
-        if (savedCount > 0) {
-            log.info("Saved {} whale transactions in batch", savedCount);
-        }
-        
-        return savedCount;
     }
     
     /**
@@ -113,7 +91,7 @@ public class WhaleDatabaseSink {
      * @return true if exists, false otherwise
      */
     public boolean transactionExists(String transactionHash) {
-        return whaleTransactionRepository.findByHash(transactionHash).isPresent();
+        return whaleTransactionRepository.existsByHash(transactionHash);
     }
     
     /**

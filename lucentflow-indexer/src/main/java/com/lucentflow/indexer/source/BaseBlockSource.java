@@ -19,6 +19,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import org.springframework.context.event.EventListener;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.annotation.DependsOn;
 
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
@@ -34,6 +37,7 @@ import io.github.resilience4j.core.functions.CheckedSupplier;
  */
 @Slf4j
 @Component
+@DependsOn("flyway")
 public class BaseBlockSource {
     
     private final Web3j web3j;
@@ -75,13 +79,33 @@ public class BaseBlockSource {
     
     private Long lastScannedBlock;
     
-    @PostConstruct
+    @EventListener(ApplicationReadyEvent.class)
+    public void onApplicationReady() {
+        log.info("System signaled READY. Initializing block height from database...");
+        initializeLastScannedBlock();
+    }
+    
     public void initializeLastScannedBlock() {
         try {
             Optional<SyncStatus> latestStatus = syncStatusRepository.findFirstByOrderByIdDesc();
             if (latestStatus.isPresent()) {
                 lastScannedBlock = latestStatus.get().getLastScannedBlock();
-                log.info("Loaded last scanned block from database: {}", lastScannedBlock);
+                
+                // Genesis Trap Fix: If last_scanned_block is 0, start from current height - 10
+                if (lastScannedBlock == 0) {
+                    EthBlockNumber blockNumber = web3j.ethBlockNumber().send();
+                    long currentHeight = blockNumber.getBlockNumber().longValue();
+                    lastScannedBlock = currentHeight - 10;
+                    
+                    log.info("Genesis Trap detected: last_scanned_block was 0, starting from current height - 10: {}", lastScannedBlock);
+                    
+                    // Update the database with the new starting point
+                    SyncStatus status = latestStatus.get();
+                    status.setLastScannedBlock(lastScannedBlock);
+                    syncStatusRepository.save(status);
+                } else {
+                    log.info("Loaded last scanned block from database: {}", lastScannedBlock);
+                }
             } else {
                 // Start from current block if no history exists
                 EthBlockNumber blockNumber = web3j.ethBlockNumber().send();
@@ -94,8 +118,9 @@ public class BaseBlockSource {
                 syncStatusRepository.save(initialStatus);
             }
         } catch (Exception e) {
-            log.error("Failed to initialize last scanned block", e);
-            throw new RuntimeException("Initialization failed", e);
+            log.error("Failed to initialize last scanned block - database may not be ready yet", e);
+            // Don't throw exception - let the application start and retry later
+            lastScannedBlock = 0L; // Default fallback
         }
     }
     
@@ -182,14 +207,23 @@ public class BaseBlockSource {
      * @return List of transactions
      */
     public List<Transaction> getTransactionsFromBlock(EthBlock.Block block) {
-        List<Transaction> transactions = block.getTransactions().stream().map(Transaction.class::cast).toList();
+        List<Transaction> transactions = block.getTransactions().stream()
+                .map(txResult -> (Transaction) txResult.get())
+                .toList();
         
         // Push whale transactions to TransactionPipe for zero-loss processing
         for (Transaction tx : transactions) {
             if (isWhaleTransaction(tx)) {
-                // Push the original Web3j Transaction to pipe (not WhaleTransaction)
-                transactionPipe.push(tx);
-                log.debug("Pushed whale transaction to pipe: {}", tx.getHash());
+                try {
+                    // Push the original Web3j Transaction to pipe (not WhaleTransaction)
+                    transactionPipe.push(tx);
+                    log.debug("Pushed whale transaction to pipe: {}", tx.getHash());
+                } catch (InterruptedException e) {
+                    log.error("Interrupt detected while pushing transaction {} to pipe. Restoring interrupt status...", tx.getHash());
+                    Thread.currentThread().interrupt(); // T10 Standard: Must restore interrupt status
+                    // Break the loop to avoid further processing when interrupted
+                    break;
+                }
             }
         }
         

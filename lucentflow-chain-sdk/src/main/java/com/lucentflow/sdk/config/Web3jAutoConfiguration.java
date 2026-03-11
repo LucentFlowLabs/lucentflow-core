@@ -3,6 +3,7 @@ package com.lucentflow.sdk.config;
 import okhttp3.ConnectionPool;
 import okhttp3.Dispatcher;
 import okhttp3.OkHttpClient;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -17,6 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import jakarta.annotation.PreDestroy;
 
 /**
  * Spring Boot auto-configuration for Web3j with Java 21 virtual thread integration.
@@ -31,10 +33,13 @@ import java.util.concurrent.TimeUnit;
  * @author ArchLucent
  * @since 1.0
  */
+@Slf4j
 @Configuration
 @EnableAsync
 @EnableConfigurationProperties(Web3jAutoConfiguration.Web3jProperties.class)
 public class Web3jAutoConfiguration {
+    
+    private ScheduledExecutorService web3jExecutorService;
 
     /**
      * Creates a ScheduledExecutorService using Java 21 virtual threads for Web3j polling.
@@ -46,19 +51,41 @@ public class Web3jAutoConfiguration {
     @Bean
     public ScheduledExecutorService web3jExecutorService() {
         try {
-            // Java 21+ virtual thread implementation using reflection
-            Object threadBuilder = Thread.class.getMethod("ofVirtual").invoke(null);
-            Object namedBuilder = threadBuilder.getClass().getMethod("name", String.class, int.class)
-                    .invoke(threadBuilder, "web3j-poller-", 0);
-            ThreadFactory threadFactory = (ThreadFactory) namedBuilder.getClass().getMethod("factory").invoke(namedBuilder);
-            return Executors.newSingleThreadScheduledExecutor(threadFactory);
+            // Java 21+ virtual thread implementation
+            ScheduledExecutorService executor = Executors.newScheduledThreadPool(1, 
+                Thread.ofVirtual().name("web3j-scheduler-", 0).factory());
+            log.info("Web3j virtual thread executor initialized successfully");
+            this.web3jExecutorService = executor; // Store reference for shutdown
+            return executor;
         } catch (Exception e) {
             // Fallback to traditional threads for Java < 21
-            return Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "web3j-poller-0");
+            ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "web3j-scheduler-0");
                 t.setDaemon(true);
                 return t;
             });
+            log.warn("Web3j falling back to traditional thread executor: {}", e.getMessage());
+            this.web3jExecutorService = executor; // Store reference for shutdown
+            return executor;
+        }
+    }
+    
+    @PreDestroy
+    public void shutdownExecutor() {
+        if (web3jExecutorService != null && !web3jExecutorService.isShutdown()) {
+            log.info("Gracefully shutting down Web3j executor service");
+            web3jExecutorService.shutdown();
+            try {
+                if (!web3jExecutorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                    log.warn("Web3j executor did not terminate gracefully within 10 seconds, forcing shutdown");
+                    web3jExecutorService.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                log.warn("Interrupted while waiting for Web3j executor termination");
+                Thread.currentThread().interrupt();
+                web3jExecutorService.shutdownNow();
+            }
+            log.info("Web3j executor service shutdown completed");
         }
     }
 
