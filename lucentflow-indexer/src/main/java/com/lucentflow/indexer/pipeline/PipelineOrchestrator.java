@@ -1,6 +1,7 @@
 package com.lucentflow.indexer.pipeline;
 
 import com.lucentflow.common.entity.SyncStatus;
+import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
 import com.lucentflow.indexer.source.BaseBlockSource;
@@ -15,7 +16,11 @@ import org.springframework.transaction.annotation.Transactional;
 import org.web3j.protocol.core.methods.response.EthBlock;
 import org.web3j.protocol.core.methods.response.Transaction;
 
+import jakarta.annotation.PreDestroy;
 import java.util.Random;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 
 /**
@@ -41,7 +46,14 @@ public class PipelineOrchestrator {
     private final WhaleDatabaseSink whaleDatabaseSink;
     private final SyncStatusRepository syncStatusRepository;
     private final ApplicationContext applicationContext;
+    private final TransactionPipe transactionPipe;
     private final Random random = new Random();
+    
+    // T10 Standard: Private Virtual Thread Executor to prevent ForkJoinPool leaks
+    private final ExecutorService pipelineExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    
+    // Shutdown awareness flag
+    private volatile boolean isShuttingDown = false;
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;
     private static final int MAX_CONCURRENT_RPC_CALLS = 5; // Recommended limit for public nodes
@@ -52,12 +64,14 @@ public class PipelineOrchestrator {
                                TransactionTransformer transactionTransformer,
                                WhaleDatabaseSink whaleDatabaseSink,
                                SyncStatusRepository syncStatusRepository,
-                               ApplicationContext applicationContext) {
+                               ApplicationContext applicationContext,
+                               TransactionPipe transactionPipe) {
         this.blockSource = blockSource;
         this.transactionTransformer = transactionTransformer;
         this.whaleDatabaseSink = whaleDatabaseSink;
         this.syncStatusRepository = syncStatusRepository;
         this.applicationContext = applicationContext;
+        this.transactionPipe = transactionPipe;
     }
     
     /**
@@ -153,6 +167,12 @@ public class PipelineOrchestrator {
         for (long blockNum = startBlock; blockNum <= endBlock; blockNum++) {
             final long currentBlock = blockNum;
             
+            // Check for thread interruption before submitting tasks
+            if (Thread.currentThread().isInterrupted()) {
+                log.info("Block processing interrupted, stopping submission of remaining tasks");
+                return;
+            }
+            
             // Add jitter between batches to avoid Thundering Herd
             if (blockNum > startBlock) {
                 try {
@@ -164,25 +184,41 @@ public class PipelineOrchestrator {
                 }
             }
             
-            futures[(int) (blockNum - startBlock)] = java.util.concurrent.CompletableFuture.runAsync(() -> {
-                try {
-                    // Acquire RPC semaphore before making any RPC calls
-                    rpcSemaphore.acquire();
+            try {
+                futures[(int) (blockNum - startBlock)] = java.util.concurrent.CompletableFuture.runAsync(() -> {
                     try {
-                        processBlock(currentBlock);
-                    } finally {
-                        // Always release semaphore
-                        rpcSemaphore.release();
+                        // Check for interruption inside the async task
+                        if (Thread.currentThread().isInterrupted()) {
+                            log.debug("Async task interrupted for block {}", currentBlock);
+                            return;
+                        }
+                        
+                        // Acquire RPC semaphore before making any RPC calls
+                        rpcSemaphore.acquire();
+                        try {
+                            // Check shutdown flag before processing
+                            if (isShuttingDown || Thread.currentThread().isInterrupted()) {
+                                log.warn("Pipeline shutting down. Aborting parallel block processing.");
+                                return;
+                            }
+                            processBlock(currentBlock);
+                        } finally {
+                            // Always release semaphore
+                            rpcSemaphore.release();
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        log.warn("Block processing interrupted for block {}", currentBlock);
+                    } catch (Exception e) {
+                        if (!(e instanceof InterruptedException)) {
+                            log.error("Error processing block {} in parallel", currentBlock, e);
+                        }
                     }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    log.warn("Block processing interrupted for block {}", currentBlock);
-                } catch (Exception e) {
-                    if (!(e instanceof InterruptedException)) {
-                        log.error("Error processing block {} in parallel", currentBlock, e);
-                    }
-                }
-            });
+                }, pipelineExecutor);
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                log.warn("Shutdown in progress - rejected task for block {}: {}", currentBlock, e.getMessage());
+                break; // Stop submitting more tasks
+            }
         }
         
         // Wait for all parallel processing to complete
@@ -269,5 +305,27 @@ public class PipelineOrchestrator {
         stats.append("- Latest Block: ").append(blockSource.getLatestBlockNumber()).append("\n");
         stats.append(whaleDatabaseSink.getDatabaseStatistics());
         return stats.toString();
+    }
+    
+    /**
+     * Cleanup method to set shutdown flag when Spring context is destroyed.
+     */
+    @PreDestroy
+    public void shutdown() {
+        this.isShuttingDown = true;
+        log.info("PipelineOrchestrator: Shutdown signal received.");
+        
+        // Shutdown TransactionPipe to clear pending transactions
+        if (transactionPipe != null) {
+            transactionPipe.shutdown();
+        }
+        
+        // T10 Standard: Shutdown private Virtual Thread Executor
+        if (pipelineExecutor != null) {
+            pipelineExecutor.shutdownNow();
+            log.info("Pipeline executor shutdown completed.");
+        }
+        
+        log.info("Pipeline orchestrator shutting down...");
     }
 }

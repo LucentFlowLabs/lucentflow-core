@@ -84,6 +84,15 @@ public class WhaleTransaction {
     
     @Column(name = "transaction_category", length = 30)
     private String transactionCategory;
+    
+    @Column(name = "funding_source_address", length = 42)
+    private String fundingSourceAddress;
+    
+    @Column(name = "funding_source_tag", length = 100)
+    private String fundingSourceTag;
+    
+    @Column(name = "rug_risk_level", length = 20)
+    private String rugRiskLevel;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     @CreatedDate

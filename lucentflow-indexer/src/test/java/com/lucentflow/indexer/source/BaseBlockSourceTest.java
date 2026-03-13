@@ -7,8 +7,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.test.annotation.DirtiesContext;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.stubbing.Answer;
+import static org.mockito.Mockito.*;
 import org.web3j.protocol.Web3j;
 import org.web3j.protocol.core.Request;
 import org.web3j.protocol.core.methods.response.EthBlock;
@@ -36,22 +40,18 @@ import static org.mockito.Mockito.*;
  *   <li>Resilience4j retry logic for HTTP 429 rate limiting scenarios</li>
  *   <li>Block range calculation between lastScannedBlock and chain head</li>
  *   <li>Error handling for network failures and invalid responses</li>
- *   <li>Zero-loss pipeline integration with TransactionPipe</li>
  * </ul>
  * 
  * <p>Performance Characteristics:</p>
  * <ul>
- *   <li>O(1) block number fetching with automatic retry</li>
- *   <li>O(n) block range processing where n = block count in range</li>
- *   <li>Fault-tolerant with exponential backoff retry strategy</li>
- *   <li>Zero-loss guarantee through blocking queue semantics</li>
+ *   <li>Optimized for Base L2 high-frequency block production</li>
+ *   <li>Efficient batch processing for large block ranges</li>
+ *   <li>Memory-conscious streaming for large transaction volumes</li>
  * </ul>
- * 
- * @author ArchLucent
- * @since 1.0
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("BaseBlockSource Blockchain Integration Tests")
+@DirtiesContext
 class BaseBlockSourceTest {
 
     @Mock
@@ -79,7 +79,11 @@ class BaseBlockSourceTest {
     
     @BeforeEach
     void setUp() {
-        baseBlockSource = new BaseBlockSource(web3j, syncStatusRepository, transactionPipe);
+        // Create a mock ObjectProvider that returns null (Flyway disabled)
+        ObjectProvider<org.flywaydb.core.Flyway> flywayProvider = mock(ObjectProvider.class);
+        when(flywayProvider.getIfAvailable()).thenReturn(null);
+        
+        baseBlockSource = new BaseBlockSource(web3j, syncStatusRepository, transactionPipe, flywayProvider);
     }
     
     @Test

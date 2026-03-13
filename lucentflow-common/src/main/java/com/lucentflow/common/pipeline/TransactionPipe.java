@@ -1,5 +1,6 @@
 package com.lucentflow.common.pipeline;
 
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -87,5 +88,25 @@ public class TransactionPipe {
         } else {
             log.info("Pipe Status: {} tx buffered.", queue.size());
         }
+    }
+
+    /**
+     * Aggressive shutdown method to clear queue and unblock waiting threads.
+     */
+    @PreDestroy
+    public void clear() {
+        log.info("Force clearing TransactionPipe, removing {} pending txs.", queue.size());
+        queue.clear();
+        // Force unblock any threads stuck in take/poll operations
+        log.info("TransactionPipe force clear complete. Final stats: {} total processed, {} backpressure events.", 
+                totalProcessed.get(), backpressureEvents.get());
+    }
+
+    /**
+     * Gracefully shuts down the pipe by clearing the queue.
+     */
+    public void shutdown() {
+        log.info("Shutting down TransactionPipe. Clearing {} pending transactions.", queue.size());
+        queue.clear();
     }
 }

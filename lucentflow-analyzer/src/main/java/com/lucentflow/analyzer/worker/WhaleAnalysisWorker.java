@@ -2,10 +2,12 @@ package com.lucentflow.analyzer.worker;
 
 import com.lucentflow.analyzer.service.AddressLabeler;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
+import com.lucentflow.indexer.service.CreatorFundingTracer;
 import com.lucentflow.common.constant.BaseChainConstants;
 import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.common.utils.EthUnitConverter;
 import com.lucentflow.common.pipeline.TransactionPipe;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -15,9 +17,12 @@ import org.web3j.protocol.core.methods.response.Transaction;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.LockSupport;
 
 /**
@@ -32,10 +37,15 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private final TransactionPipe transactionPipe;
     private final AddressLabeler addressLabeler;
     private final WhaleDatabaseSink whaleDatabaseSink;
+    private final CreatorFundingTracer creatorFundingTracer;
     
     private final AtomicLong processedCount = new AtomicLong(0);
     private final AtomicLong whaleCount = new AtomicLong(0);
     private final AtomicLong errorCount = new AtomicLong(0);
+    private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
+
+    // T10 Standard: Class-level ExecutorService for nuclear shutdown
+    private ExecutorService executor;
 
     private static final int BATCH_SIZE = 50;
     private static final int CONCURRENCY = 3; // Number of parallel virtual thread workers
@@ -44,7 +54,10 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     public void run(String... args) {
         log.info("Initializing WhaleAnalysisWorker with {} virtual thread workers.", CONCURRENCY);
         
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        // T10 Standard: Use class-level ExecutorService for proper lifecycle management
+        this.executor = Executors.newVirtualThreadPerTaskExecutor();
+        
+        try {
             for (int i = 0; i < CONCURRENCY; i++) {
                 int workerId = i;
                 executor.submit(() -> startAnalysisLoop(workerId));
@@ -128,6 +141,13 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
 
     private boolean isWhale(Transaction tx) {
         if (tx == null || tx.getValue() == null) return false;
+        
+        // NEW LOGIC: Always allow contract creations, even if value is 0
+        if (tx.getTo() == null) {
+            return true; // Contract creation - always pass through for anti-rug analysis
+        }
+        
+        // Regular transfers must meet whale threshold
         return tx.getValue().compareTo(EthUnitConverter.etherStringToWei(
                 String.valueOf(BaseChainConstants.WHALE_THRESHOLD))) > 0;
     }
@@ -142,5 +162,48 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         whaleTx.setWhaleCategory(BaseChainConstants.classifyWhaleSize(value));
         whaleTx.setFromAddressTag(fromLabel);
         whaleTx.setToAddressTag(toLabel);
+        
+        // Anti-Rug Trace: Enrich contract creations with funding analysis
+        if (whaleTx.getIsContractCreation()) {
+            try {
+                // Async enrichment without blocking virtual thread workers
+                CompletableFuture<WhaleTransaction> enrichedFuture = creatorFundingTracer.enrichRugMetrics(whaleTx);
+                // Non-blocking get with timeout to prevent pipeline stalls
+                WhaleTransaction enriched = enrichedFuture.get(5, TimeUnit.SECONDS);
+                if (enriched != null) {
+                    whaleTx.setFundingSourceAddress(enriched.getFundingSourceAddress());
+                    whaleTx.setFundingSourceTag(enriched.getFundingSourceTag());
+                    whaleTx.setRugRiskLevel(enriched.getRugRiskLevel());
+                    
+                    // Log risk alerts for high/critical levels
+                    if ("HIGH".equals(enriched.getRugRiskLevel()) || "CRITICAL".equals(enriched.getRugRiskLevel())) {
+                        log.warn("[RUG-ALERT] High risk contract detected! Creator: {}, Source: {}, Risk: {}", 
+                                whaleTx.getFromAddress(), enriched.getFundingSourceTag(), enriched.getRugRiskLevel());
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Failed to enrich rug metrics for contract {}: {}", whaleTx.getHash(), e.getMessage());
+                // Continue processing without rug analysis to prevent pipeline disruption
+            }
+        }
+    }
+
+    /**
+     * T10 Standard: Nuclear shutdown with ExecutorService force kill
+     */
+    @PreDestroy
+    public void stop() {
+        log.info("Nuclear shutdown: Force stopping WhaleAnalysisWorker...");
+        isShuttingDown.set(true);
+        Thread.currentThread().interrupt();
+        
+        // T10 Standard: Force kill all virtual thread tasks
+        if (executor != null) {
+            executor.shutdownNow(); // Force kill all tasks
+            log.info("ExecutorService shutdown completed.");
+        }
+        
+        log.info("WhaleAnalysisWorker nuclear shutdown complete. Final stats: {} processed, {} whales detected, {} errors.", 
+                processedCount.get(), whaleCount.get(), errorCount.get());
     }
 }

@@ -21,7 +21,7 @@ import java.util.List;
 import java.util.Optional;
 import org.springframework.context.event.EventListener;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.annotation.DependsOn;
+import org.springframework.beans.factory.ObjectProvider;
 
 /**
  * High-performance blockchain poller for transaction extraction and pipeline feeding.
@@ -38,18 +38,19 @@ import org.springframework.context.annotation.DependsOn;
  */
 @Slf4j
 @Component
-@DependsOn("flyway")
 public class BaseBlockPoller {
     
     private final Web3j web3j;
     private final TransactionPipe transactionPipe;
     private final SyncStatusRepository syncStatusRepository;
+    private final org.flywaydb.core.Flyway flyway;
     
     @Autowired
-    public BaseBlockPoller(Web3j web3j, TransactionPipe transactionPipe, SyncStatusRepository syncStatusRepository) {
+    public BaseBlockPoller(Web3j web3j, TransactionPipe transactionPipe, SyncStatusRepository syncStatusRepository, ObjectProvider<org.flywaydb.core.Flyway> flywayProvider) {
         this.web3j = web3j;
         this.transactionPipe = transactionPipe;
         this.syncStatusRepository = syncStatusRepository;
+        this.flyway = flywayProvider.getIfAvailable(); // Becomes null if disabled
     }
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;

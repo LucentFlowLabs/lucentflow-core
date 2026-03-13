@@ -22,6 +22,16 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableAsync
 public class LucentFlowApplication {
 
+    /**
+     * Pre-initialize web3j Async to avoid IllegalStateException during shutdown hooks registration
+     */
+    static {
+        // Pre-initialize web3j Async to avoid IllegalStateException during shutdown hooks registration
+        try {
+            Class.forName("org.web3j.utils.Async");
+        } catch (ClassNotFoundException ignored) {}
+    }
+
     public static void main(String[] args) {
         SpringApplication.run(LucentFlowApplication.class, args);
     }

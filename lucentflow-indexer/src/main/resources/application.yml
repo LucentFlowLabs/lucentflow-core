@@ -58,3 +58,9 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+
+# Basescan API Configuration
+lucentflow:
+  basescan:
+    api-key: ${BASESCAN_API_KEY:}
+    base-url: https://api.basescan.org/api
