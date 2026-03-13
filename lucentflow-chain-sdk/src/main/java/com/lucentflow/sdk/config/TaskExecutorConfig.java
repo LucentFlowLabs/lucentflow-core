@@ -33,16 +33,16 @@ public class TaskExecutorConfig {
      * - CallerRunsPolicy rejection handling for graceful degradation
      * - 60-second thread keep-alive for resource efficiency</p>
      * 
-     * @return Configured TaskExecutor bean named "lucentTaskExecutor"
+     * @return Configured TaskExecutor bean named "globalLucentTaskExecutor"
      */
-    @Bean(name = "lucentTaskExecutor")
-    public TaskExecutor lucentTaskExecutor() {
+    @Bean(name = "globalLucentTaskExecutor")
+    public TaskExecutor globalLucentTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         
         // Use custom thread factory for virtual-like performance on Java 17
         executor.setThreadFactory(runnable -> {
             Thread thread = new Thread(runnable);
-            thread.setName("lucent-task-" + thread.getId());
+            thread.setName("global-task-" + thread.getId());
             thread.setDaemon(true);
             return thread;
         });

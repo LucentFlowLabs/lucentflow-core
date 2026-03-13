@@ -59,6 +59,7 @@ public class CryptoUtils {
 
     private static final SecureRandom SECURE_RANDOM;
     private static final Map<String, Integer> WORD_LOOKUP_MAP;
+    private static final Map<Integer, String> INDEX_LOOKUP_MAP;
     private static final String BASE_GAS_ORACLE = "0x420000000000000000000000000000000000000F";
 
     static {
@@ -73,10 +74,13 @@ public class CryptoUtils {
         // significantly improving performance over linear search operations.
         List<String> words = MnemonicUtils.getWords();
         Map<String, Integer> tempMap = new HashMap<>();
+        Map<Integer, String> reverseMap = new HashMap<>();
         for (int i = 0; i < words.size(); i++) {
             tempMap.put(words.get(i), i);
+            reverseMap.put(i, words.get(i));
         }
         WORD_LOOKUP_MAP = Collections.unmodifiableMap(tempMap);
+        INDEX_LOOKUP_MAP = Collections.unmodifiableMap(reverseMap);
     }
 
     // --- 1. BIP-39 & BIP-44 Logic ---
@@ -223,22 +227,24 @@ public class CryptoUtils {
         if (indices == null) {
             throw new IllegalArgumentException("Indices cannot be null");
         }
-        
-        if (indices.trim().isEmpty()) {
+            if (indices.trim().isEmpty()) {
             throw new IllegalArgumentException("Numeric indices cannot be empty");
         }
         
         String[] idxArr = indices.split("\\s+");
-        List<String> wordList = MnemonicUtils.getWords();
         
         try {
             String mnemonic = Arrays.stream(idxArr)
                     .map(s -> {
                         int index = Integer.parseInt(s);
-                        if (index < 0 || index >= wordList.size()) {
-                            throw new IndexOutOfBoundsException("Index " + index + " out of range for wordlist size " + wordList.size());
+                        if (index < 0 || index >= INDEX_LOOKUP_MAP.size()) {
+                            throw new IndexOutOfBoundsException("Index " + index + " out of range for wordlist size " + INDEX_LOOKUP_MAP.size());
                         }
-                        return wordList.get(index);
+                        String word = INDEX_LOOKUP_MAP.get(index);
+                        if (word == null) {
+                            throw new IndexOutOfBoundsException("Index " + index + " not found in lookup map");
+                        }
+                        return word;
                     })
                     .collect(Collectors.joining(" "));
             

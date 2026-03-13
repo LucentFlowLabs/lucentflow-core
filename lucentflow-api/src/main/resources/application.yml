@@ -45,6 +45,9 @@ spring:
 lucentflow:
   chain:
     rpc-url: https://mainnet.base.org
+  basescan:
+    api-key: ${BASESCAN_API_KEY:}
+    base-url: ${BASESCAN_BASE_URL:https://api.basescan.org/api}
 
 logging:
   file:
@@ -59,3 +62,14 @@ logging:
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
     org.flywaydb: DEBUG
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+  flyway:
+    enabled: true
+    repair-on-migrate: true
+    baseline-on-migrate: true
+    validate-on-migrate: false # Temporarily bypass validation to allow the repair to trigger

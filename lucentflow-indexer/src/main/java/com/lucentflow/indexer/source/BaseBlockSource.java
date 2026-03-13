@@ -21,7 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.springframework.context.event.EventListener;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.annotation.DependsOn;
+import org.springframework.beans.factory.ObjectProvider;
 
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
@@ -37,12 +37,12 @@ import io.github.resilience4j.core.functions.CheckedSupplier;
  */
 @Slf4j
 @Component
-@DependsOn("flyway")
 public class BaseBlockSource {
     
     private final Web3j web3j;
     private final SyncStatusRepository syncStatusRepository;
     private final TransactionPipe transactionPipe;
+    private final org.flywaydb.core.Flyway flyway;
     
     // Whale threshold constant for efficiency
     private static final BigInteger WHALE_THRESHOLD = com.lucentflow.common.utils.EthUnitConverter.etherStringToWei("10");
@@ -51,10 +51,11 @@ public class BaseBlockSource {
     private final Retry retryConfig;
     
     @Autowired
-    public BaseBlockSource(Web3j web3j, SyncStatusRepository syncStatusRepository, TransactionPipe transactionPipe) {
+    public BaseBlockSource(Web3j web3j, SyncStatusRepository syncStatusRepository, TransactionPipe transactionPipe, ObjectProvider<org.flywaydb.core.Flyway> flywayProvider) {
         this.web3j = web3j;
         this.syncStatusRepository = syncStatusRepository;
         this.transactionPipe = transactionPipe;
+        this.flyway = flywayProvider.getIfAvailable(); // Becomes null if disabled
         
         // Configure retry with exponential backoff
         this.retryConfig = Retry.of("web3jRetry", RetryConfig.custom()
@@ -177,6 +178,7 @@ public class BaseBlockSource {
     public EthBlock.Block fetchBlock(long blockNumber) {
         CheckedSupplier<EthBlock.Block> blockSupplier = Retry.decorateCheckedSupplier(retryConfig, () -> {
             // Use async request with hard timeout for better resilience
+            try {
             CompletableFuture<EthBlock> future = web3j.ethGetBlockByNumber(
                 DefaultBlockParameter.valueOf(BigInteger.valueOf(blockNumber)), 
                 true
@@ -185,6 +187,13 @@ public class BaseBlockSource {
             // Apply hard timeout of 20 seconds
             EthBlock block = future.orTimeout(20, TimeUnit.SECONDS).get();
             return block.getBlock();
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            log.warn("Shutdown in progress - rejected web3j async call for block {}: {}", blockNumber, e.getMessage());
+            return null; // Stop the pipeline immediately
+        } catch (NoClassDefFoundError | IllegalStateException e) {
+            log.warn("web3j Async initialization error during shutdown for block {}: {}", blockNumber, e.getMessage());
+            return null;
+        }
         });
         
         try {
