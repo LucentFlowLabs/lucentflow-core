@@ -5,7 +5,15 @@
 
 set -e
 
+# Get the absolute path of the directory where this script is located
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PROJECT_ROOT="$SCRIPT_DIR"
+DEPLOY_DIR="$PROJECT_ROOT/lucentflow-deployment/docker"
+API_DIR="$PROJECT_ROOT/lucentflow-api"
+
 echo "🚀 Starting LucentFlow Infrastructure..."
+echo "📁 Project Root: $PROJECT_ROOT"
+echo "📦 Deployment Dir: $DEPLOY_DIR"
 
 # Check if Docker is running
 if ! command -v docker &> /dev/null; then
@@ -14,12 +22,28 @@ if ! command -v docker &> /dev/null; then
 fi
 
 # Navigate to deployment directory
-cd "$(dirname "$0")/lucentflow-deployment"
+cd "$DEPLOY_DIR"
 
-echo "📦 Starting services with Docker Compose..."
+# Check for .env file
+if [ ! -f "$DEPLOY_DIR/.env" ]; then
+    echo "🔧 .env file not found, copying from .env.example..."
+    if [ -f "$DEPLOY_DIR/.env.example" ]; then
+        cp "$DEPLOY_DIR/.env.example" "$DEPLOY_DIR/.env"
+        echo "✅ .env file created from template"
+        echo "💡 Please edit .env file with your specific configuration"
+        echo "🔑 Set your BASESCAN_API_KEY before running production"
+    else
+        echo "❌ .env.example file not found!"
+        exit 1
+    fi
+fi
 
-# Start all services
-docker-compose up -d
+echo "📦 Starting services with Docker Compose (strict env-file mode)..."
+
+echo "ℹ️  Note: If this is your first run, Docker will download dependencies and compile the project. This may take a few minutes..."
+
+# Start all services with explicit env-file to ignore shell variables
+docker-compose --env-file .env up -d
 
 echo "⏳ Waiting for services to be ready..."
 
@@ -56,14 +80,17 @@ echo ""
 echo "💡 Navigate to lucentflow-api directory and run:"
 echo "   mvn spring-boot:run"
 echo ""
-echo "📖 API Documentation will be available at:"
+echo "� JAR Execution (Alternative):"
+echo "   java -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar"
+echo ""
+echo "�📖 API Documentation will be available at:"
 echo "   http://localhost:8080/swagger-ui.html"
 echo ""
 echo "🔍 Health Check:"
 echo "   curl http://localhost:8080/actuator/health"
 
 # Navigate to API directory
-cd ../lucentflow-api
+cd "$API_DIR"
 
 echo "🎯 Ready to start LucentFlow application!"
 echo "Press Ctrl+C to stop all services"

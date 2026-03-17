@@ -4,9 +4,9 @@ services:
     container_name: lucentflow-postgres
     restart: always
     environment:
-      POSTGRES_DB: lucentflow
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: lucentflow_pwd
+      POSTGRES_DB: ${POSTGRES_DB:-lucentflow}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lucentflow_pwd}
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
     ports:
       - "5432:5432"
@@ -16,7 +16,7 @@ services:
     networks:
       - lucentflow-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d lucentflow"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-lucentflow}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -28,7 +28,7 @@ services:
     restart: always
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@lucentflow.com
-      PGADMIN_DEFAULT_PASSWORD: lucentflow_admin
+      PGADMIN_DEFAULT_PASSWORD: ${POSTGRES_PASSWORD:-lucentflow_pwd}_admin
       PGADMIN_CONFIG_SERVER_MODE: 'False'
     ports:
       - "5050:80"
@@ -60,6 +60,41 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  lucentflow-api:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    container_name: lucentflow-api
+    restart: always
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-lucentflow}?reWriteBatchedInserts=true
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-admin}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-lucentflow_pwd}
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-lucentflow}
+      SPRING_FLYWAY_USER: ${POSTGRES_USER:-admin}
+      SPRING_FLYWAY_PASSWORD: ${POSTGRES_PASSWORD:-lucentflow_pwd}
+      SPRING_FLYWAY_USERNAME: ${POSTGRES_USER:-admin}
+      JAVA_OPTS: ${JAVA_OPTS:--XX:+UseZGC -XX:+ZGenerational -Xms512m -Xmx2g}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-docker}
+      PROXY_HOST: ${PROXY_HOST:-127.0.0.1}
+      PROXY_PORT: ${PROXY_PORT:-10808}
+      BASESCAN_API_KEY: ${BASESCAN_API_KEY:-}
+      BASESCAN_BASE_URL: https://api.basescan.org/api
+      LUCENTFLOW_CHAIN_RPC_URL: ${LUCENTFLOW_CHAIN_RPC_URL:-https://mainnet.base.org}
+    ports:
+      - "8080:8080"
+    networks:
+      - lucentflow-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
 
 volumes:
   postgres_data:

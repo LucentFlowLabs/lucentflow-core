@@ -1,73 +1,132 @@
-# LucentFlow Core
+# LucentFlow Core (v1.0.0)
 
-![Java 21](https://img.shields.io/badge/Java-21-orange?style=flat&logo=java)
-![Spring Boot 3.4](https://img.shields.io/badge/Spring%20Boot-3.4-brightgreen?style=flat&logo=spring-boot)
-![Web3j](https://img.shields.io/badge/Web3j-4.12.0-blue?style=flat)
-![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat&logo=postgresql)
+ ![Java 21](https://img.shields.io/badge/Java-21-orange?style=flat&logo=java)
+ ![Spring Boot 3.4](https://img.shields.io/badge/Spring%20Boot-3.4-brightgreen?style=flat&logo=spring-boot)
+![Base L2](https://img.shields.io/badge/Base-L2-blue?style=flat)
+![Docker Ready](https://img.shields.io/badge/Docker-One--Click-blue?style=flat&logo=docker)
 
-> **Clarity in Stream.**
-> High-performance Base (L2) network monitoring and asset security auditing engine. Built with Java 21 Virtual Threads & Structured Concurrency.
+
+
+> **"Self-Custody means Self-Auditing."**  
+> High-performance Base (L2) network monitoring and asset security auditing engine. Built for transparency, privacy, and industrial-grade reliability.
 
 ---
 
-## 🛡️ Project Vision
-LucentFlow is designed to bring transparency to the Base Layer 2 ecosystem. By utilizing an industrial-grade pipeline architecture, it monitors large-scale capital movements (Whales) and detects high-risk contract deployments in real-time, providing funding source traceability before "rug" happens.
+## 🌟 Core Pillars
+1. **Whale Sentinel**: Real-time tracking of 10+ ETH movements with precise L1 Data Fee & L2 Execution Fee estimation.
+2. **Genesis Tracer**: Deep-recursive funding source auditing. Trace any address back 3 levels (Nonce-0) to identify links to mixers or malicious deployers.
+3. **Anti-Rug Engine**: Automated risk scoring for contract creators based on seed funding reputation and historical deployment patterns on Base.
 
-## 🏗️ Technical Architecture
-```mermaid
-graph LR
-    subgraph "Base Network (L2)"
-        RPC[Public/Private RPC]
-    end
+## ⚡ Engineering & Security Excellence
+- **Triple Cross-Verification (TCV)**: Our crypto logic is mathematically proven through three layers:
+    - ✅ **Standard Vectors**: BIP-39 official test vector alignment.
+    - ✅ **Signature Recovery**: Mathematical loopback proof (`PrivKey -> Sign -> Recover == Addr`).
+    - ✅ **Clean-room Implementation**: Manual Keccak-256 address derivation bypassing high-level library abstractions.
+- **High-Performance Pipeline**: Virtual thread-based architecture achieving massive I/O throughput with minimal memory footprint.
+- **Base Oracle Integration**: Built-in 5s TTL cache for Base L2 GasPriceOracle to mitigate RPC rate-limiting.
 
-    subgraph "LucentFlow Engine (Java 21 Virtual Threads)"
-        Source[BaseBlockPoller] -->|Block Polling| Pipe[TransactionPipe]
-        Pipe -->|Transaction Stream| Worker[WhaleAnalysisWorker]
-        Worker -->|Heuristics/Tagging| Sink[WhaleDatabaseSink]
-    end
+---
 
-    subgraph "Persistence & Visualization"
-        Sink --> DB[(PostgreSQL 16)]
-        DB --> Dashboard[Metabase Dashboard]
-    end
+## 🚀 One-Click Private Deployment (Full Docker)
 
-    API[RESTful Gateway] <--> DB
+<p align="center">
+  <img src="docs/images/dockerps.png" width="800" alt="Docker Operational Status">
+  <br>
+  <em>Figure 1: LucentFlow local cluster running in full-green healthy state.</em>
+</p>
+
+Ideal for private auditors, whales, and protocol teams. No local JDK/Maven required.
+
+### Quick Start
+### 1. Initial Setup (Manual Option)
+If you prefer not to use our startup scripts, prepare your environment manually:
+```bash
+cp lucentflow-deployment/docker/.env.example lucentflow-deployment/docker/.env
+# Edit .env to add your BASESCAN_API_KEY
+
+**Linux/Mac:**
+```bash
+# Clone repository
+git clone https://github.com/YourUsername/lucentflow-core.git
+cd lucentflow
+
+# Start infrastructure (auto-creates .env if missing)
+./start-infrastructure.sh
 ```
 
-## ⚡ Key Engineering Features
-- **Project Loom Integration**: Entire pipeline runs on Virtual Threads, achieving massive I/O throughput with minimal memory footprint.
-- **Zero-Loss Guarantee**: Custom-built TransactionPipe utilizes BlockingQueue semantics to ensure no audit data is dropped under network spikes.
-- **BIP-44 Path Anchoring**: Optimized address derivation logic achieving 300% higher throughput for batch wallet auditing.
-- **Base Oracle Integration**: Precise transaction cost estimation including L1 Data Fees and L2 Execution Fees.
+**Windows:**
+```powershell
+# Clone repository
+git clone https://github.com/YourUsername/lucentflow-core.git
+cd lucentflow
 
-## 🚀 Quick Start (Local Environment)
+# Start infrastructure (auto-creates .env if missing)
+.\start-infrastructure.ps1
+```
 
-### Prerequisites
-- Docker & Docker Desktop
-- JDK 21 (for build)
-- Maven 3.9+
-- **Reliable Internet**: Required for Maven dependencies (consider proxy in restricted regions)
+### Full Docker Mode
 
-### Spin up the Infrastructure
+For complete Docker deployment (including application):
 ```bash
 cd lucentflow-deployment/docker
-docker-compose up -d
+
+# Spin up entire stack (App, DB, Metabase, pgAdmin)
+docker-compose up --build -d
 ```
 
-### Run the Engine
+### ✅ Verify Health Status
+
+Once containers are running, you can verify application health:
 ```bash
+curl http://localhost:8080/actuator/health
+# Expected Output: {"status":"UP"}
+```
+
+## 🛠️ Developer Mode (Hybrid Mode)
+Ideal for active development, debugging, and testing.
+
+**Linux/Mac:**
+```bash
+# Start Infrastructure only (Docker)
+./start-infrastructure.sh
+
+# Build & Run Application (Local)
+cd ../..
 mvn clean install -DskipTests
 cd lucentflow-api
-java -jar target/lucentflow-api-0.1.0-SNAPSHOT.jar
+
+# Run with local profile
+java "-Dspring.profiles.active=local" \
+     "-Dhttps.proxyHost=127.0.0.1" \
+     "-Dhttps.proxyPort=10808" \
+     -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
 ```
 
-Access the interactive API console at: http://localhost:8080/swagger-ui/index.html
+**Windows:**
+```powershell
+# Start Infrastructure only (Docker)
+.\start-infrastructure.ps1
 
-## 📚 Documentation
-- [API Reference](./API-DOCUMENTATION.md)
-- [Infrastructure Setup](./INFRASTRUCTURE.md)
-- [Local Development Guide](./LOCAL-DEVELOPMENT.md)
+# Build & Run Application (Local)
+cd ..\..\nmvn clean install -DskipTests
+cd lucentflow-api
+
+# Run with local profile
+java "-Dspring.profiles.active=local" `
+     "-Dhttps.proxyHost=127.0.0.1" `
+     "-Dhttps.proxyPort=10808" `
+     -jar lucentflow-api\target\lucentflow-api-1.0.0-RELEASE.jar
+```
+
+Note: In Hybrid mode, local app connects to Dockerized DB via localhost:5432.
+
+## 📊 Monitoring & Visualization
+Access your pre-configured security cockpit:
+
+- **Metabase Dashboards**: [http://localhost:3000](http://localhost:3000) (Visualize capital inflow/outflow)
+- **Interactive API Console**: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html)
+- **Database Management (pgAdmin)**: [http://localhost:5050](http://localhost:5050)
 
 ## ⚖️ License
-Distributed under the Apache License 2.0. See LICENSE for more information.
+
+Distributed under Apache License 2.0. Built with passion for Base community.
