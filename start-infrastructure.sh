@@ -38,6 +38,25 @@ if [ ! -f "$DEPLOY_DIR/.env" ]; then
     fi
 fi
 
+# Load environment variables from .env file
+if [ -f "$DEPLOY_DIR/.env" ]; then
+    # Safe extraction of proxy variables
+    ENV_FILE="$DEPLOY_DIR/.env"
+    P_HOST=$(grep "^PROXY_HOST=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"')
+    P_PORT=$(grep "^PROXY_PORT=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"')
+
+    if [ -n "$P_HOST" ]; then
+        echo "🌐 Network Proxy detected: $P_HOST:$P_PORT"
+        export JAVA_PROXY_ARGS="-Dhttps.proxyHost=$P_HOST -Dhttps.proxyPort=$P_PORT"
+    else
+        echo "🌐 No proxy configured. Direct connection enabled."
+        export JAVA_PROXY_ARGS=""
+    fi
+else
+    echo "🌐 No proxy configured. Direct connection enabled."
+    export JAVA_PROXY_ARGS=""
+fi
+
 echo "📦 Starting services with Docker Compose (strict env-file mode)..."
 
 echo "ℹ️  Note: If this is your first run, Docker will download dependencies and compile the project. This may take a few minutes..."
@@ -80,8 +99,12 @@ echo ""
 echo "💡 Navigate to lucentflow-api directory and run:"
 echo "   mvn spring-boot:run"
 echo ""
-echo "� JAR Execution (Alternative):"
-echo "   java -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar"
+echo "📦 JAR Execution (Alternative):"
+if [ -n "$JAVA_PROXY_ARGS" ]; then
+    echo "   java $JAVA_PROXY_ARGS -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar"
+else
+    echo "   java -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar"
+fi
 echo ""
 echo "�📖 API Documentation will be available at:"
 echo "   http://localhost:8080/swagger-ui.html"

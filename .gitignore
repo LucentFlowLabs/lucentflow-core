@@ -38,6 +38,10 @@ private/
 logs/
 *.out
 *.err
+*.log.*
+*.log.*.gz
+*.log.*.zip
+logs/**
 
 # Database Files
 *.db
