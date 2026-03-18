@@ -43,6 +43,31 @@ if (-not (Test-Path $EnvFile)) {
     }
 }
 
+# Load environment variables from .env file
+$EnvVars = @{}
+Get-Content $EnvFile | ForEach-Object {
+    if ($_ -match '^\s*([^#].+?)\s*=\s*(.+?)\s*$') {
+        $EnvVars[$matches[1]] = $matches[2]
+    }
+}
+
+# Build Java command with optional proxy logic
+$JavaProxyArgs = ""
+if ($EnvVars['PROXY_HOST'] -and $EnvVars['PROXY_HOST'].Trim() -ne '""' -and $EnvVars['PROXY_HOST'].Trim() -ne '') {
+    $PHost = $EnvVars['PROXY_HOST'].Trim('"')
+    $PPort = if ($EnvVars['PROXY_PORT']) { $EnvVars['PROXY_PORT'].Trim('"') } else { "" }
+    
+    if ($PPort -and $PPort -ne '') {
+        $JavaProxyArgs = "-Dhttps.proxyHost=$($PHost) -Dhttps.proxyPort=$($PPort)"
+        Write-Host "🌐 Network Proxy detected: $PHost:$PPort" -ForegroundColor Cyan
+    } else {
+        $JavaProxyArgs = "-Dhttps.proxyHost=$($PHost)"
+        Write-Host "🌐 Network Proxy detected: $PHost" -ForegroundColor Cyan
+    }
+} else {
+    Write-Host "🌐 No proxy configured. Direct connection enabled." -ForegroundColor Cyan
+}
+
 Write-Host "📦 Starting services with Docker Compose..." -ForegroundColor Blue
 
 Write-Host "ℹ️  Note: First-time build might take a few minutes to download Maven dependencies inside Docker..." -ForegroundColor Cyan
@@ -63,7 +88,7 @@ Write-Host "🔍 Checking PostgreSQL health..." -ForegroundColor Blue
 $ready = $false
 for ($i = 1; $i -le 30; $i++) {
     try {
-        $result = docker exec lucentflow-postgres pg_isready -U admin -d lucentflow 2>$null
+        docker exec lucentflow-postgres pg_isready -U admin -d lucentflow 2>$null
         if ($LASTEXITCODE -eq 0) {
             Write-Host "✅ PostgreSQL is ready!" -ForegroundColor Green
             $ready = $true
@@ -102,8 +127,12 @@ Write-Host ""
 Write-Host "💡 Navigate to lucentflow-api directory and run:" -ForegroundColor Cyan
 Write-Host "   mvn spring-boot:run" -ForegroundColor White
 Write-Host ""
-Write-Host "� JAR Execution (Alternative):" -ForegroundColor Cyan
-Write-Host "   java -jar lucentflow-api\target\lucentflow-api-1.0.0-RELEASE.jar" -ForegroundColor White
+Write-Host "📦 JAR Execution (Alternative):" -ForegroundColor Cyan
+if ($JavaProxyArgs) {
+    Write-Host "   java $JavaProxyArgs -jar lucentflow-api\target\lucentflow-api-1.0.0-RELEASE.jar" -ForegroundColor White
+} else {
+    Write-Host "   java -jar lucentflow-api\target\lucentflow-api-1.0.0-RELEASE.jar" -ForegroundColor White
+}
 Write-Host ""
 Write-Host "�📖 API Documentation will be available at:" -ForegroundColor Cyan
 Write-Host "   http://localhost:8080/swagger-ui.html" -ForegroundColor White
