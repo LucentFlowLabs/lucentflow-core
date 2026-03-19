@@ -22,6 +22,19 @@ try {
     exit 1
 }
 
+# Check if Docker Compose V2 is available
+try {
+    $null = docker compose version 2>$null
+    Write-Host "✅ Docker Compose V2 is available" -ForegroundColor Green
+} catch {
+    Write-Host "❌ Docker Compose V2 is not installed or not available" -ForegroundColor Red
+    Write-Host "📋 Required: Docker Compose V2 (v2.20.0+)" -ForegroundColor Yellow
+    Write-Host "💡 To upgrade:" -ForegroundColor Cyan
+    Write-Host "   - Download Docker Desktop 4.25.0+ from https://www.docker.com/products/docker-desktop" -ForegroundColor White
+    Write-Host "   - Or install Docker Compose V2 standalone: https://docs.docker.com/compose/install/" -ForegroundColor White
+    exit 1
+}
+
 # Navigate to deployment directory
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DeployDir = Join-Path $ScriptDir "lucentflow-deployment\docker"
@@ -59,25 +72,25 @@ if ($EnvVars['PROXY_HOST'] -and $EnvVars['PROXY_HOST'].Trim() -ne '""' -and $Env
     
     if ($PPort -and $PPort -ne '') {
         $JavaProxyArgs = "-Dhttps.proxyHost=$($PHost) -Dhttps.proxyPort=$($PPort)"
-        Write-Host "🌐 Network Proxy detected: $PHost:$PPort" -ForegroundColor Cyan
+        Write-Host "🌐 Network Proxy detected: ${PHost}:${PPort}" -ForegroundColor Cyan
     } else {
         $JavaProxyArgs = "-Dhttps.proxyHost=$($PHost)"
-        Write-Host "🌐 Network Proxy detected: $PHost" -ForegroundColor Cyan
+        Write-Host "🌐 Network Proxy detected: ${PHost}" -ForegroundColor Cyan
     }
 } else {
     Write-Host "🌐 No proxy configured. Direct connection enabled." -ForegroundColor Cyan
 }
 
-Write-Host "📦 Starting services with Docker Compose..." -ForegroundColor Blue
+Write-Host "📦 Starting services with Docker Compose V2..." -ForegroundColor Blue
 
 Write-Host "ℹ️  Note: First-time build might take a few minutes to download Maven dependencies inside Docker..." -ForegroundColor Cyan
 
-# Start all services with explicit env-file to ignore shell variables
+# Start all services with Docker Compose V2
 try {
-    docker-compose --env-file .env up -d
-    Write-Host "✅ Docker Compose started successfully" -ForegroundColor Green
+    docker compose up -d
+    Write-Host "✅ Docker Compose V2 started successfully" -ForegroundColor Green
 } catch {
-    Write-Host "❌ Failed to start Docker Compose: $_" -ForegroundColor Red
+    Write-Host "❌ Failed to start Docker Compose V2: $_" -ForegroundColor Red
     exit 1
 }
 
@@ -104,10 +117,39 @@ for ($i = 1; $i -le 30; $i++) {
 if (-not $ready) {
     Write-Host "❌ PostgreSQL failed to start within 60 seconds" -ForegroundColor Red
     Write-Host "🔍 Checking logs:" -ForegroundColor Yellow
-    docker-compose logs postgres
+    docker compose logs postgres
     if ($Cleanup) {
         Write-Host "🛑 Cleaning up services..." -ForegroundColor Yellow
-        docker-compose down
+        docker compose down
+    }
+    exit 1
+}
+
+# Wait for LucentFlow API to be healthy
+Write-Host "🔍 Checking LucentFlow API health..." -ForegroundColor Blue
+$apiReady = $false
+for ($i = 1; $i -le 60; $i++) {
+    try {
+        $response = Invoke-WebRequest -Uri "http://localhost:8080/actuator/health" -UseBasicParsing -TimeoutSec 2 2>$null
+        if ($response.StatusCode -eq 200) {
+            Write-Host "✅ LucentFlow API is healthy and ready!" -ForegroundColor Green
+            $apiReady = $true
+            break
+        }
+    } catch {
+        # Continue trying
+    }
+    Write-Host "⏳ Waiting for LucentFlow API... ($i/60)" -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
+}
+
+if (-not $apiReady) {
+    Write-Host "❌ LucentFlow API failed to become healthy within 120 seconds" -ForegroundColor Red
+    Write-Host "🔍 Checking logs:" -ForegroundColor Yellow
+    docker compose logs lucentflow-api
+    if ($Cleanup) {
+        Write-Host "🛑 Cleaning up services..." -ForegroundColor Yellow
+        docker compose down
     }
     exit 1
 }

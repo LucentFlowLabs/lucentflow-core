@@ -27,6 +27,46 @@
 
 ---
 
+## 📋 Prerequisites
+
+### System Requirements
+- **Docker Engine**: 20.10+ with Docker Compose V2 (v2.20.0+)
+- **Operating System**: Linux, macOS, or Windows 10/11 with WSL2
+- **Memory**: Minimum 4GB RAM (8GB recommended)
+- **Disk**: 10GB free space for Docker images and data
+
+### Docker Compose V2 Installation
+
+**Docker Desktop (Recommended):**
+- Download Docker Desktop 4.25.0+ from https://www.docker.com/products/docker-desktop
+- Docker Compose V2 is included automatically
+
+**Standalone Installation:**
+```bash
+# Linux/macOS
+# 1. Create the directory for Docker CLI plugins
+mkdir -p ~/.docker/cli-plugins/
+
+# 2. Download the V2 binary into the plugin directory
+curl -SL https://github.com/docker/compose/releases/download/v2.20.0/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose
+
+# 3. Apply executable permissions
+chmod +x ~/.docker/cli-plugins/docker-compose
+
+# 4. Verify (Should return: Docker Compose version v2.20.0)
+docker compose version
+
+```
+
+**Upgrade from Docker Compose V1:**
+```bash
+# If you have docker-compose (V1), upgrade to V2
+docker compose version
+# If command not found, install Docker Desktop or standalone V2
+```
+
+---
+
 ## 🚀 One-Click Private Deployment (Full Docker)
 
 <p align="center">
@@ -35,22 +75,26 @@
   <em>Figure 1: LucentFlow local cluster running in full-green healthy state.</em>
 </p>
 
-Ideal for private auditors, whales, and protocol teams. No local JDK/Maven required.
+Ideal for private auditors, institutional investors, and protocol teams. No local JDK/Maven required.
 
 ### Quick Start
-### 1. Initial Setup (Manual Option)
+
+#### 1. Initial Setup (Manual Option)
 If you prefer not to use our startup scripts, prepare your environment manually:
 ```bash
 cp lucentflow-deployment/docker/.env.example lucentflow-deployment/docker/.env
 # Edit .env to add your BASESCAN_API_KEY
+```
+
+#### 2. Automated Startup
 
 **Linux/Mac:**
 ```bash
 # Clone repository
 git clone https://github.com/YourUsername/lucentflow-core.git
-cd lucentflow
+cd lucentflow-core
 
-# Start infrastructure (auto-creates .env if missing)
+# Start infrastructure (auto-creates .env if missing, requires Docker Compose V2)
 ./start-infrastructure.sh
 ```
 
@@ -58,9 +102,9 @@ cd lucentflow
 ```powershell
 # Clone repository
 git clone https://github.com/YourUsername/lucentflow-core.git
-cd lucentflow
+cd lucentflow-core
 
-# Start infrastructure (auto-creates .env if missing)
+# Start infrastructure (auto-creates .env if missing, requires Docker Compose V2)
 .\start-infrastructure.ps1
 ```
 
@@ -70,8 +114,8 @@ For complete Docker deployment (including application):
 ```bash
 cd lucentflow-deployment/docker
 
-# Spin up entire stack (App, DB, Metabase, pgAdmin)
-docker-compose up --build -d
+# Spin up entire stack (App, DB, Metabase, pgAdmin) - requires Docker Compose V2
+docker compose up --build -d
 ```
 
 ### ✅ Verify Health Status
@@ -91,14 +135,10 @@ Ideal for active development, debugging, and testing.
 ./start-infrastructure.sh
 
 # Build & Run Application (Local)
-cd ../..
 mvn clean install -DskipTests
-cd lucentflow-api
 
 # Run with local profile
 java "-Dspring.profiles.active=local" \
-     "-Dhttps.proxyHost=127.0.0.1" \
-     "-Dhttps.proxyPort=10808" \
      -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
 ```
 
@@ -108,20 +148,17 @@ java "-Dspring.profiles.active=local" \
 .\start-infrastructure.ps1
 
 # Build & Run Application (Local)
-cd ..\..\nmvn clean install -DskipTests
-cd lucentflow-api
+mvn clean install -DskipTests
 
 # Run with local profile
 java "-Dspring.profiles.active=local" `
-     "-Dhttps.proxyHost=127.0.0.1" `
-     "-Dhttps.proxyPort=10808" `
-     -jar lucentflow-api\target\lucentflow-api-1.0.0-RELEASE.jar
+     -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
 ```
 
-Note: In Hybrid mode, local app connects to Dockerized DB via localhost:5432.
+**Note:** In Hybrid mode, the local application connects to the Dockerized database via localhost:5432.
 
 ## 📊 Monitoring & Visualization
-Access your pre-configured security cockpit:
+Access your security dashboard:
 
 - **Metabase Dashboards**: [http://localhost:3000](http://localhost:3000) (Visualize capital inflow/outflow)
 - **Interactive API Console**: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html)

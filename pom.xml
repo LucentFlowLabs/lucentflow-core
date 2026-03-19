@@ -6,6 +6,8 @@
     <artifactId>lucentflow-parent</artifactId>
     <version>1.0.0-RELEASE</version>
     <packaging>pom</packaging>
+    <name>LucentFlow</name>
+    <description>The High-Concurrency Sentinel for Base Ecosystem</description>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
