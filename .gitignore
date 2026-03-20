@@ -38,6 +38,10 @@ private/
 logs/
 *.out
 *.err
+*.log.*
+*.log.*.gz
+*.log.*.zip
+logs/**
 
 # Database Files
 *.db
@@ -126,3 +130,4 @@ config/secrets/
 *.lock
 
 et TZ
+metabase-data/

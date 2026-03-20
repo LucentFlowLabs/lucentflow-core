@@ -10,7 +10,6 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -37,12 +36,17 @@ import java.util.Optional;
 @Slf4j
 @RestController
 @RequestMapping("/api/v1")
-@RequiredArgsConstructor
 @Tag(name = "Whale Query API", description = "API for querying whale transactions and sync status")
 public class WhaleQueryController {
     
     private final WhaleTransactionRepository whaleTransactionRepository;
     private final SyncStatusRepository syncStatusRepository;
+    
+    public WhaleQueryController(WhaleTransactionRepository whaleTransactionRepository,
+                                SyncStatusRepository syncStatusRepository) {
+        this.whaleTransactionRepository = whaleTransactionRepository;
+        this.syncStatusRepository = syncStatusRepository;
+    }
     
     /**
      * Get paginated list of whale transactions with optional minimum ETH filter.

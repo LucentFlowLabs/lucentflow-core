@@ -6,9 +6,9 @@ spring:
     virtual:
       enabled: true
   datasource:
-    url: jdbc:postgresql://localhost:5432/lucentflow
-    username: admin
-    password: lucentflow_pwd
+    url: jdbc:postgresql://${DB_HOST:localhost}:5432/${POSTGRES_DB:lucentflow}
+    username: ${POSTGRES_USER:admin}
+    password: ${POSTGRES_PASSWORD}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 20
@@ -44,9 +44,9 @@ spring:
 
 lucentflow:
   chain:
-    rpc-url: https://mainnet.base.org
+    rpc-url: ${LUCENTFLOW_CHAIN_RPC_URL:https://mainnet.base.org}
   basescan:
-    api-key: ${BASESCAN_API_KEY:}
+    api-key: ${BASESCAN_API_KEY}
     base-url: ${BASESCAN_BASE_URL:https://api.basescan.org/api}
 
 logging:
@@ -56,12 +56,12 @@ logging:
     rollingpolicy:
       max-history: 7
   level:
-    com.lucentflow: DEBUG
+    com.lucentflow: INFO
     okhttp3: INFO
     org.web3j: INFO
-    org.hibernate.SQL: DEBUG
+    org.hibernate.SQL: INFO
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
-    org.flywaydb: DEBUG
+    org.flywaydb: INFO
 
 ---
 spring:
