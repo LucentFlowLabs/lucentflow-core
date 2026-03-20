@@ -143,15 +143,16 @@ echo ""
 echo "🔍 Health Check:"
 echo "   curl http://localhost:8080/actuator/health"
 
-# Navigate to API directory
-cd "$API_DIR"
 
-echo "🎯 Ready to start LucentFlow application!"
-echo "Press Ctrl+C to stop all services"
-echo ""
+echo "✅ Infrastructure is running in the background."
+echo "💡 To stop all services later, run: docker compose -f $DEPLOY_DIR/docker-compose.yml down"
+echo "----------------------------------------------------------------"
+
 
 # Trap to handle cleanup
 trap 'echo "🛑 Stopping services..."; docker-compose down; exit' INT
 
-# Keep script running
-tail -f /dev/null
+# Navigate to API directory
+cd "$API_DIR"
+echo "📍 Current Directory: $(pwd)"
+echo "🚀 You can now start the application."

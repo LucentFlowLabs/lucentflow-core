@@ -125,6 +125,12 @@ Once containers are running, you can verify application health:
 curl http://localhost:8080/actuator/health
 # Expected Output: {"status":"UP"}
 ```
+<p align="center">
+  <img src="docs/images/dashboard_hero.png" width="800" alt="dashboard hero">
+  <br>
+  <em>Caption: Figure 1: Real-time Whale Ecology & Activity Patterns on Base.</em>
+</p>
+
 
 ## 🛠️ Developer Mode (Hybrid Mode)
 Ideal for active development, debugging, and testing.
