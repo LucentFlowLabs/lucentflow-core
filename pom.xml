@@ -6,6 +6,8 @@
     <artifactId>lucentflow-parent</artifactId>
     <version>1.0.0-RELEASE</version>
     <packaging>pom</packaging>
+    <name>LucentFlow</name>
+    <description>The High-Concurrency Sentinel for Base Ecosystem</description>
 
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
@@ -145,6 +147,13 @@
                         <source>${maven.compiler.source}</source>
                         <target>${maven.compiler.target}</target>
                         <encoding>${project.build.sourceEncoding}</encoding>
+                        <annotationProcessorPaths>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>1.18.30</version>
+                            </path>
+                        </annotationProcessorPaths>
                     </configuration>
                 </plugin>
             </plugins>

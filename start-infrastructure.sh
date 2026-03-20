@@ -21,6 +21,18 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
+# Check if Docker Compose V2 is available
+if ! docker compose version &> /dev/null; then
+    echo "❌ Docker Compose V2 is not installed or not available"
+    echo "📋 Required: Docker Compose V2 (v2.20.0+)"
+    echo "💡 To upgrade:"
+    echo "   - Download Docker Desktop 4.25.0+ from https://www.docker.com/products/docker-desktop"
+    echo "   - Or install Docker Compose V2 standalone: https://docs.docker.com/compose/install/"
+    exit 1
+fi
+
+echo "✅ Docker and Docker Compose V2 are available"
+
 # Navigate to deployment directory
 cd "$DEPLOY_DIR"
 
@@ -57,14 +69,15 @@ else
     export JAVA_PROXY_ARGS=""
 fi
 
-echo "📦 Starting services with Docker Compose (strict env-file mode)..."
+echo "📦 Starting services with Docker Compose V2..."
 
 echo "ℹ️  Note: If this is your first run, Docker will download dependencies and compile the project. This may take a few minutes..."
 
-# Start all services with explicit env-file to ignore shell variables
-docker-compose --env-file .env up -d
+# Start all services with Docker Compose V2
+docker compose up -d
 
-echo "⏳ Waiting for services to be ready..."
+echo "⏳ Waiting for services to initialize..."
+sleep 10
 
 # Wait for PostgreSQL to be ready
 echo "🔍 Checking PostgreSQL health..."
@@ -80,7 +93,25 @@ done
 if [ $i -eq 30 ]; then
     echo "❌ PostgreSQL failed to start within 60 seconds"
     echo "🔍 Checking logs:"
-    docker-compose logs postgres
+    docker compose logs postgres
+    exit 1
+fi
+
+# Wait for LucentFlow API to be healthy
+echo "🔍 Checking LucentFlow API health..."
+for i in {1..60}; do
+    if curl -f http://localhost:8080/actuator/health &> /dev/null; then
+        echo "✅ LucentFlow API is healthy and ready!"
+        break
+    fi
+    echo "⏳ Waiting for LucentFlow API... ($i/60)"
+    sleep 2
+done
+
+if [ $i -eq 60 ]; then
+    echo "❌ LucentFlow API failed to become healthy within 120 seconds"
+    echo "🔍 Checking logs:"
+    docker compose logs lucentflow-api
     exit 1
 fi
 
@@ -112,15 +143,16 @@ echo ""
 echo "🔍 Health Check:"
 echo "   curl http://localhost:8080/actuator/health"
 
-# Navigate to API directory
-cd "$API_DIR"
 
-echo "🎯 Ready to start LucentFlow application!"
-echo "Press Ctrl+C to stop all services"
-echo ""
+echo "✅ Infrastructure is running in the background."
+echo "💡 To stop all services later, run: docker compose -f $DEPLOY_DIR/docker-compose.yml down"
+echo "----------------------------------------------------------------"
+
 
 # Trap to handle cleanup
 trap 'echo "🛑 Stopping services..."; docker-compose down; exit' INT
 
-# Keep script running
-tail -f /dev/null
+# Navigate to API directory
+cd "$API_DIR"
+echo "📍 Current Directory: $(pwd)"
+echo "🚀 You can now start the application."

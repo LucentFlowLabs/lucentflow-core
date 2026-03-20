@@ -130,3 +130,4 @@ config/secrets/
 *.lock
 
 et TZ
+metabase-data/

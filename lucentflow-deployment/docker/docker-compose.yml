@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -45,21 +47,25 @@ services:
     container_name: lucentflow-metabase
     restart: always
     environment:
-      MB_ENABLE_METRICS: true
-      MB_SITE_URL: http://localhost:3000
-      MB_SITE_NAME: LucentFlow Dashboard
+      MB_SITE_NAME: "LucentFlow | Base Asset Intelligence"
+      MB_SITE_URL: "http://localhost:3000"
+      MB_ENABLE_METRICS: "true"
+      MB_JETTY_PORT: "3000"
+      MB_DB_TYPE: h2
+      MB_DB_FILE: /metabase-data/metabase.db
+      JAVA_OPTS: "-Xmx512m -Xms512m"
     ports:
       - "3000:3000"
     networks:
       - lucentflow-network
     volumes:
-      - metabase_data:/var/lib/metabase
+      - ./metabase-data:/metabase-data
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 45s
 
   lucentflow-api:
     build:
@@ -67,6 +73,8 @@ services:
       dockerfile: Dockerfile
     container_name: lucentflow-api
     restart: always
+    env_file:
+      - .env
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-lucentflow}?reWriteBatchedInserts=true
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-admin}
@@ -100,8 +108,6 @@ volumes:
   postgres_data:
     driver: local
   pgadmin_data:
-    driver: local
-  metabase_data:
     driver: local
 
 networks:

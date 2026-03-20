@@ -6,6 +6,27 @@
 
 LucentFlow is built on **"Zero-Trust Security"** principles where all infrastructure runs within your private environment. No external runtime dependencies required, no shared resources, complete data sovereignty.
 
+### 📋 Docker Compose V2 Requirement
+
+**Critical Requirement**: LucentFlow requires **Docker Compose V2 (v2.20.0+)** for production deployment.
+
+**Why Docker Compose V2?**
+- ✅ **Enhanced Health Monitoring**: Improved health check integration
+- ✅ **Better Dependency Management**: Superior `depends_on` condition handling
+- ✅ **Performance**: Faster startup and better resource utilization
+- ✅ **Security**: Enhanced security features and isolation
+- ✅ **Future-Proof**: Active development and long-term support
+
+**Verification Commands:**
+```bash
+# Check Docker Compose version
+docker compose version
+# Expected: Docker Compose version v2.20.0+
+
+# Upgrade if needed
+docker compose version
+```
+
 ---
 
 ## 🐳 Infrastructure Topology
@@ -50,34 +71,24 @@ graph TB
 
 ### .env File Structure
 
+Essential configuration variables for LucentFlow deployment:
+
 ```bash
-# Database Configuration
+# Database Configuration (Required)
 POSTGRES_DB=lucentflow
 POSTGRES_USER=admin
-POSTGRES_PASSWORD=lucentflow_pwd
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
+POSTGRES_PASSWORD=your_secure_password
 
-# LucentFlow Application Database
-SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/lucentflow?reWriteBatchedInserts=true
-SPRING_DATASOURCE_USERNAME=${POSTGRES_USER}
-SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD}
-SPRING_FLYWAY_URL=jdbc:postgresql://postgres:5432/lucentflow
-SPRING_FLYWAY_USER=${POSTGRES_USER}
-SPRING_FLYWAY_PASSWORD=${POSTGRES_PASSWORD}
-
-# JVM Optimization
-JAVA_OPTS=-XX:+UseZGC -XX:+ZGenerational -Xms512m -Xmx2g
-
-# Network Configuration
-PROXY_HOST=127.0.0.1
-PROXY_PORT=10808
-SPRING_PROFILES_ACTIVE=docker
-
-# Base Network Integration
-BASESCAN_API_KEY=your_basescan_key
+# Base Network Integration (Required)
+BASESCAN_API_KEY=your_basescan_api_key
 BASESCAN_BASE_URL=https://api.basescan.org/api
 LUCENTFLOW_CHAIN_RPC_URL=https://mainnet.base.org
+
+# JVM Optimization (Optional)
+JAVA_OPTS=-XX:+UseZGC -XX:+ZGenerational -Xms512m -Xmx2g
+
+# Spring Profile
+SPRING_PROFILES_ACTIVE=docker
 ```
 
 ---
@@ -114,6 +125,24 @@ volumes:
 ---
 
 ## 🔍 Health Monitoring System
+
+### Service Dependencies and Startup Sequencing
+
+LucentFlow uses **long-form dependency management** to ensure services start in the correct order:
+
+```yaml
+# Example: LucentFlow API waits for healthy database
+lucentflow-api:
+  depends_on:
+    postgres:
+      condition: service_healthy  # Critical stability feature
+```
+
+**Benefits of `condition: service_healthy`:**
+- ✅ **Zero Race Conditions**: Services only start when dependencies are fully ready
+- ✅ **Automatic Recovery**: Failed dependencies trigger service restart
+- ✅ **Production Reliability**: Eliminates startup failures in production environments
+- ✅ **Health Monitoring**: Continuous monitoring of service dependencies
 
 ### Container-Level Health Checks
 
@@ -158,7 +187,7 @@ docker inspect lucentflow-api --format='{{.State.Health.Status}}'
 docker inspect lucentflow-postgres --format='{{.State.Health.Status}}'
 
 # Health logs monitoring
-docker-compose logs -f lucentflow-api | grep health
+docker compose logs -f lucentflow-api | grep health
 ```
 
 ---
@@ -245,7 +274,7 @@ spring:
 ```bash
 # Production deployment
 cd lucentflow-deployment/docker
-docker-compose up --build -d
+docker compose up --build -d
 
 # Verification
 curl http://localhost:8080/actuator/health
@@ -256,13 +285,13 @@ curl http://localhost:8080/actuator/health
 
 ```bash
 # Scale application
-docker-compose up --scale lucentflow-api=3
+docker compose up --scale lucentflow-api=3
 
 # Rolling update
-docker-compose up --build --no-deps lucentflow-api
+docker compose up --build --no-deps lucentflow-api
 
 # Health monitoring
-docker-compose ps
+docker compose ps
 watch -n 5 'docker ps --format "table {{.Names}}\t{{.Status}}"'
 ```
 
@@ -331,16 +360,13 @@ docker exec -i lucentflow-postgres psql -U admin lucentflow < backup_20260317.sq
 
 ```bash
 # Step 1: Start infrastructure (Docker)
-cd lucentflow-deployment/docker
-docker-compose up -d postgres pgadmin metabase
+./start-infrastructure.sh
 
-# Step 2: Run application locally (for debugging)
-cd ../..
+# Step 2: Build & Run application locally
 mvn clean install -DskipTests
-cd lucentflow-api
+
+# Step 3: Run with local profile
 java "-Dspring.profiles.active=local" \
-     "-Dhttps.proxyHost=127.0.0.1" \
-     "-Dhttps.proxyPort=10808" \
      -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
 ```
 
@@ -348,7 +374,7 @@ java "-Dspring.profiles.active=local" \
 
 ```bash
 # Everything in Docker (recommended for testing)
-docker-compose -f docker-compose.dev.yml up --build
+docker compose -f docker-compose.dev.yml up --build
 ```
 
 ---
@@ -378,7 +404,7 @@ curl http://localhost:8080/actuator/env
 docker stats lucentflow-api
 
 # Log aggregation
-docker-compose logs -f lucentflow-api
+docker compose logs -f lucentflow-api
 
 # Network diagnostics
 docker network inspect lucentflow-network
@@ -399,13 +425,13 @@ docker network inspect lucentflow-network
 
 ```bash
 # Check all service health
-docker-compose ps
+docker compose ps
 
 # Inspect specific service health
 docker inspect lucentflow-api --format='{{json .State.Health}}'
 
 # View health check logs
-docker-compose logs lucentflow-api | tail -20
+docker compose logs lucentflow-api | tail -20
 ```
 
 ### Network Connectivity Issues
@@ -450,7 +476,7 @@ docker stats --no-stream lucentflow-api
 - [ ] JVM optimization flags applied
 - [ ] Database connection pool tuned
 - [ ] Health checks configured and tested
-- [ ] Resource limits set in docker-compose
+- [ ] Resource limits set in docker-compose.yml
 - [ ] Monitoring endpoints accessible
 - [ ] Backup strategy documented
 
