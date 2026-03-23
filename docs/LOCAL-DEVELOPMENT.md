@@ -351,7 +351,7 @@ mvn clean package -DskipTests
 java "-Dspring.profiles.active=local" \
      "-Dhttps.proxyHost=127.0.0.1" \
      "-Dhttps.proxyPort=10808" \
-     -jar target/lucentflow-api-1.0.0-RELEASE.jar
+     -jar target/lucentflow-api.jar
 ```
 
 ### Expected Startup Logs

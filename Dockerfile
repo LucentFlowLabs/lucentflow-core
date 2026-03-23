@@ -41,7 +41,7 @@ WORKDIR /app
 RUN groupadd -r lucentflow && useradd -r -g lucentflow lucentflow
 
 # Copy the built JAR from build stage
-COPY --from=build /app/lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar app.jar
+COPY --from=build /app/lucentflow-api/target/lucentflow-api.jar app.jar
 
 # Set JVM options optimized for L2 monitoring and Virtual Threads
 ENV JAVA_OPTS="-XX:+UseZGC -XX:+ZGenerational -Xms512m -Xmx2g"

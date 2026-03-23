@@ -74,7 +74,7 @@ echo "📦 Starting services with Docker Compose V2..."
 echo "ℹ️  Note: If this is your first run, Docker will download dependencies and compile the project. This may take a few minutes..."
 
 # Start all services with Docker Compose V2
-docker compose up -d
+docker compose up -d --build lucentflow-api
 
 echo "⏳ Waiting for services to initialize..."
 sleep 10
@@ -132,9 +132,9 @@ echo "   mvn spring-boot:run"
 echo ""
 echo "📦 JAR Execution (Alternative):"
 if [ -n "$JAVA_PROXY_ARGS" ]; then
-    echo "   java $JAVA_PROXY_ARGS -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar"
+    echo "   java $JAVA_PROXY_ARGS -jar target/lucentflow-api.jar"
 else
-    echo "   java -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar"
+    echo "   java -jar target/lucentflow-api.jar"
 fi
 echo ""
 echo "�📖 API Documentation will be available at:"
@@ -150,7 +150,7 @@ echo "----------------------------------------------------------------"
 
 
 # Trap to handle cleanup
-trap 'echo "🛑 Stopping services..."; docker-compose down; exit' INT
+trap 'echo "🛑 Stopping services..."; docker compose down; exit' INT
 
 # Navigate to API directory
 cd "$API_DIR"

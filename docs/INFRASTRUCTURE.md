@@ -367,7 +367,7 @@ mvn clean install -DskipTests
 
 # Step 3: Run with local profile
 java "-Dspring.profiles.active=local" \
-     -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
+     -jar lucentflow-api/target/lucentflow-api.jar
 ```
 
 ### Full Docker Development

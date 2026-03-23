@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.lucentflow</groupId>
         <artifactId>lucentflow-parent</artifactId>
-        <version>1.0.0-RELEASE</version>
+        <version>${revision}</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
     <artifactId>lucentflow-api</artifactId>
@@ -69,6 +69,7 @@
     </dependencies>
 
     <build>
+        <finalName>lucentflow-api</finalName>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
