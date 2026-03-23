@@ -1,9 +1,10 @@
-# LucentFlow Core (v1.0.0)
+# LucentFlow Core (v1.0.1-SNAPSHOT)
 
- ![Java 21](https://img.shields.io/badge/Java-21-orange?style=flat&logo=java)
- ![Spring Boot 3.4](https://img.shields.io/badge/Spring%20Boot-3.4-brightgreen?style=flat&logo=spring-boot)
+![Java 21](https://img.shields.io/badge/Java-21-orange?style=flat&logo=java)
+![Spring Boot 3.4](https://img.shields.io/badge/Spring%20Boot-3.4-brightgreen?style=flat&logo=spring-boot)
 ![Base L2](https://img.shields.io/badge/Base-L2-blue?style=flat)
-![Docker Ready](https://img.shields.io/badge/Docker-One--Click-blue?style=flat&logo=docker)
+![Docker Ready](https://img.shields.io/badge/Docker-Ready-blue?style=flat&logo=docker)
+![Version](https://img.shields.io/badge/Version-1.0.1--SNAPSHOT-blue?style=flat)
 
 
 
@@ -16,6 +17,14 @@
 1. **Whale Sentinel**: Real-time tracking of 10+ ETH movements with precise L1 Data Fee & L2 Execution Fee estimation.
 2. **Genesis Tracer**: Deep-recursive funding source auditing. Trace any address back 3 levels (Nonce-0) to identify links to mixers or malicious deployers.
 3. **Anti-Rug Engine**: Automated risk scoring for contract creators based on seed funding reputation and historical deployment patterns on Base.
+
+<p align="center">
+  <img src="docs/images/dashboard_hero.png" width="800" alt="dashboard hero">
+  <br>
+  <em>Figure 1: Real-time Whale Ecology & Activity Patterns on Base.</em>
+</p>
+
+---
 
 ## ⚡ Engineering & Security Excellence
 - **Triple Cross-Verification (TCV)**: Our crypto logic is mathematically proven through three layers:
@@ -72,12 +81,14 @@ docker compose version
 <p align="center">
   <img src="docs/images/dockerps.png" width="800" alt="Docker Operational Status">
   <br>
-  <em>Figure 1: LucentFlow local cluster running in full-green healthy state.</em>
+  <em>Figure 2: LucentFlow local cluster running in full-green healthy state.</em>
 </p>
 
 Ideal for private auditors, institutional investors, and protocol teams. No local JDK/Maven required.
 
 ### Quick Start
+
+> **Highly Recommended**: Use our automated startup scripts for the best experience. They handle environment validation, Docker V2 checks, and health monitoring automatically.
 
 #### 1. Initial Setup (Manual Option)
 If you prefer not to use our startup scripts, prepare your environment manually:
@@ -91,7 +102,7 @@ cp lucentflow-deployment/docker/.env.example lucentflow-deployment/docker/.env
 **Linux/Mac:**
 ```bash
 # Clone repository
-git clone https://github.com/YourUsername/lucentflow-core.git
+git clone https://github.com/LucentFlowLabs/lucentflow-core.git
 cd lucentflow-core
 
 # Start infrastructure (auto-creates .env if missing, requires Docker Compose V2)
@@ -101,7 +112,7 @@ cd lucentflow-core
 **Windows:**
 ```powershell
 # Clone repository
-git clone https://github.com/YourUsername/lucentflow-core.git
+git clone https://github.com/LucentFlowLabs/lucentflow-core.git
 cd lucentflow-core
 
 # Start infrastructure (auto-creates .env if missing, requires Docker Compose V2)
@@ -125,11 +136,6 @@ Once containers are running, you can verify application health:
 curl http://localhost:8080/actuator/health
 # Expected Output: {"status":"UP"}
 ```
-<p align="center">
-  <img src="docs/images/dashboard_hero.png" width="800" alt="dashboard hero">
-  <br>
-  <em>Caption: Figure 1: Real-time Whale Ecology & Activity Patterns on Base.</em>
-</p>
 
 
 ## 🛠️ Developer Mode (Hybrid Mode)
@@ -143,9 +149,8 @@ Ideal for active development, debugging, and testing.
 # Build & Run Application (Local)
 mvn clean install -DskipTests
 
-# Run with local profile
-java "-Dspring.profiles.active=local" \
-     -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
+# Run with local profile (From root)
+java -Dspring.profiles.active=local -jar lucentflow-api/target/lucentflow-api.jar
 ```
 
 **Windows:**
@@ -156,9 +161,8 @@ java "-Dspring.profiles.active=local" \
 # Build & Run Application (Local)
 mvn clean install -DskipTests
 
-# Run with local profile
-java "-Dspring.profiles.active=local" `
-     -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
+# Run with local profile (From root)
+java "-Dspring.profiles.active=local" -jar lucentflow-api\target\lucentflow-api.jar
 ```
 
 **Note:** In Hybrid mode, the local application connects to the Dockerized database via localhost:5432.

@@ -87,7 +87,7 @@ Write-Host "ℹ️  Note: First-time build might take a few minutes to download 
 
 # Start all services with Docker Compose V2
 try {
-    docker compose up -d
+    docker compose up -d --build lucentflow-api
     Write-Host "✅ Docker Compose V2 started successfully" -ForegroundColor Green
 } catch {
     Write-Host "❌ Failed to start Docker Compose V2: $_" -ForegroundColor Red
@@ -171,9 +171,9 @@ Write-Host "   mvn spring-boot:run" -ForegroundColor White
 Write-Host ""
 Write-Host "📦 JAR Execution (Alternative):" -ForegroundColor Cyan
 if ($JavaProxyArgs) {
-    Write-Host "   java $JavaProxyArgs -jar lucentflow-api\target\lucentflow-api-1.0.0-RELEASE.jar" -ForegroundColor White
+    Write-Host "   java $JavaProxyArgs -jar target\lucentflow-api.jar" -ForegroundColor White
 } else {
-    Write-Host "   java -jar lucentflow-api\target\lucentflow-api-1.0.0-RELEASE.jar" -ForegroundColor White
+    Write-Host "   java -jar target\lucentflow-api.jar" -ForegroundColor White
 }
 Write-Host ""
 Write-Host "�📖 API Documentation will be available at:" -ForegroundColor Cyan
@@ -202,7 +202,7 @@ if ($Cleanup) {
     } finally {
         Write-Host "🛑 Stopping services..." -ForegroundColor Yellow
         Set-Location $DeployDir
-        docker-compose down
+        docker compose down
         Write-Host "✅ Services stopped and cleaned up" -ForegroundColor Green
     }
 } else {

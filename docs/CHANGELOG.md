@@ -117,7 +117,7 @@ docker-compose up --build -d
 ```bash
 # Fast iterative development with local Maven
 mvn clean install -DskipTests
-java -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
+java -jar lucentflow-api/target/lucentflow-api.jar
 ```
 
 ### 🌍 Platform Support
