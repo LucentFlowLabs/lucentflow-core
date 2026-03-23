@@ -91,7 +91,7 @@ cp lucentflow-deployment/docker/.env.example lucentflow-deployment/docker/.env
 **Linux/Mac:**
 ```bash
 # Clone repository
-git clone https://github.com/YourUsername/lucentflow-core.git
+git clone https://github.com/LucentFlowLabs/lucentflow-core.git
 cd lucentflow-core
 
 # Start infrastructure (auto-creates .env if missing, requires Docker Compose V2)
@@ -101,7 +101,7 @@ cd lucentflow-core
 **Windows:**
 ```powershell
 # Clone repository
-git clone https://github.com/YourUsername/lucentflow-core.git
+git clone https://github.com/LucentFlowLabs/lucentflow-core.git
 cd lucentflow-core
 
 # Start infrastructure (auto-creates .env if missing, requires Docker Compose V2)
