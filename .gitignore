@@ -4,6 +4,7 @@
 .windsurf/
 *.swp
 *.swo
+*.trae
 *~
 
 # Maven Build Files

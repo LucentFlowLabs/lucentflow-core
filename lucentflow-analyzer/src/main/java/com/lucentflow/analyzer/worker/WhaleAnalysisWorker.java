@@ -28,6 +28,9 @@ import java.util.concurrent.locks.LockSupport;
 /**
  * High-performance batch-processing whale analyzer.
  * Leverages Java 21 Virtual Threads and SQL Batching for maximum throughput.
+ * 
+ * @author ArchLucent
+ * @since 1.0
  */
 @Slf4j
 @Component
@@ -38,6 +41,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private final AddressLabeler addressLabeler;
     private final WhaleDatabaseSink whaleDatabaseSink;
     private final CreatorFundingTracer creatorFundingTracer;
+    private final com.lucentflow.analyzer.service.RiskEngine riskEngine;
     
     private final AtomicLong processedCount = new AtomicLong(0);
     private final AtomicLong whaleCount = new AtomicLong(0);
@@ -70,6 +74,12 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         }
     }
 
+    /**
+     * Core analysis loop executed by each virtual thread worker.
+     * Continuously drains transactions from the pipeline, processes them, and saves whales to the database.
+     * 
+     * @param workerId The identifier of the virtual thread worker
+     */
     private void startAnalysisLoop(int workerId) {
         log.info("Analyzer-Worker-{} (Virtual Thread) started.", workerId);
         
@@ -86,8 +96,14 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                     }
 
                     // Process batch in memory
-                    List<WhaleTransaction> whaleBatch = rawBatch.stream()
-                            .map(this::processAndFilterWhale)
+                    List<CompletableFuture<WhaleTransaction>> futures = rawBatch.stream()
+                            .map(this::processAndFilterWhaleAsync)
+                            .toList();
+
+                    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+                    List<WhaleTransaction> whaleBatch = futures.stream()
+                            .map(CompletableFuture::join)
                             .filter(Objects::nonNull)
                             .toList();
 
@@ -115,10 +131,10 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         }
     }
 
-    private WhaleTransaction processAndFilterWhale(Transaction tx) {
+    private CompletableFuture<WhaleTransaction> processAndFilterWhaleAsync(Transaction tx) {
         try {
             // 1. Threshold check
-            if (!isWhale(tx)) return null;
+            if (!isWhale(tx)) return CompletableFuture.completedFuture(null);
 
             // 2. Conversion and Enrichment
             WhaleTransaction whaleTx = WhaleTransaction.builder()
@@ -131,14 +147,22 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                     .isContractCreation(tx.getTo() == null)
                     .build();
 
-            enrich(whaleTx, tx);
-            return whaleTx;
+            return enrichAsync(whaleTx, tx).exceptionally(e -> {
+                log.warn("Failed to process tx {}: {}", tx.getHash(), e.getMessage());
+                return null;
+            });
         } catch (Exception e) {
             log.warn("Failed to process tx {}: {}", tx.getHash(), e.getMessage());
-            return null;
+            return CompletableFuture.completedFuture(null);
         }
     }
 
+    /**
+     * Evaluates if a transaction qualifies as a whale movement or contract deployment.
+     * 
+     * @param tx The raw Web3j transaction
+     * @return true if the transaction is a whale movement or contract deployment, false otherwise
+     */
     private boolean isWhale(Transaction tx) {
         if (tx == null || tx.getValue() == null) return false;
         
@@ -152,7 +176,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                 String.valueOf(BaseChainConstants.WHALE_THRESHOLD))) > 0;
     }
 
-    private void enrich(WhaleTransaction whaleTx, Transaction tx) {
+    private CompletableFuture<WhaleTransaction> enrichAsync(WhaleTransaction whaleTx, Transaction tx) {
         String fromLabel = addressLabeler.getAddressLabel(tx.getFrom());
         String toLabel = addressLabeler.getAddressLabel(tx.getTo());
         BigDecimal value = whaleTx.getValueEth();
@@ -165,31 +189,50 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         
         // Anti-Rug Trace: Enrich contract creations with funding analysis
         if (whaleTx.getIsContractCreation()) {
-            try {
-                // Async enrichment without blocking virtual thread workers
-                CompletableFuture<WhaleTransaction> enrichedFuture = creatorFundingTracer.enrichRugMetrics(whaleTx);
-                // Non-blocking get with timeout to prevent pipeline stalls
-                WhaleTransaction enriched = enrichedFuture.get(5, TimeUnit.SECONDS);
-                if (enriched != null) {
-                    whaleTx.setFundingSourceAddress(enriched.getFundingSourceAddress());
-                    whaleTx.setFundingSourceTag(enriched.getFundingSourceTag());
-                    whaleTx.setRugRiskLevel(enriched.getRugRiskLevel());
-                    
-                    // Log risk alerts for high/critical levels
-                    if ("HIGH".equals(enriched.getRugRiskLevel()) || "CRITICAL".equals(enriched.getRugRiskLevel())) {
-                        log.warn("[RUG-ALERT] High risk contract detected! Creator: {}, Source: {}, Risk: {}", 
-                                whaleTx.getFromAddress(), enriched.getFundingSourceTag(), enriched.getRugRiskLevel());
+            return creatorFundingTracer.enrichRugMetrics(whaleTx)
+                .thenApply(enriched -> {
+                    if (enriched != null) {
+                        whaleTx.setFundingSourceAddress(enriched.getFundingSourceAddress());
+                        whaleTx.setFundingSourceTag(enriched.getFundingSourceTag());
+                        whaleTx.setRugRiskLevel(enriched.getRugRiskLevel());
+                        
+                        // Log risk alerts for high/critical levels
+                        if ("HIGH".equals(enriched.getRugRiskLevel()) || "CRITICAL".equals(enriched.getRugRiskLevel())) {
+                            log.warn("[RUG-ALERT] High risk contract detected! Creator: {}, Source: {}, Risk: {}", 
+                                    whaleTx.getFromAddress(), enriched.getFundingSourceTag(), enriched.getRugRiskLevel());
+                        }
                     }
-                }
-            } catch (Exception e) {
-                log.warn("Failed to enrich rug metrics for contract {}: {}", whaleTx.getHash(), e.getMessage());
-                // Continue processing without rug analysis to prevent pipeline disruption
-            }
+                    applyRiskScoring(whaleTx, tx);
+                    return whaleTx;
+                })
+                .exceptionally(e -> {
+                    log.warn("Failed to enrich rug metrics for contract {}: {}", whaleTx.getHash(), e.getMessage());
+                    // Continue processing without rug analysis to prevent pipeline disruption
+                    applyRiskScoring(whaleTx, tx);
+                    return whaleTx;
+                });
+        } else {
+            applyRiskScoring(whaleTx, tx);
+            return CompletableFuture.completedFuture(whaleTx);
         }
     }
 
     /**
-     * T10 Standard: Nuclear shutdown with ExecutorService force kill
+     * Applies institutional-grade risk scoring to the transaction based on predefined heuristics.
+     * 
+     * @param whaleTx The WhaleTransaction entity to score
+     * @param tx The raw Web3j transaction
+     */
+    private void applyRiskScoring(WhaleTransaction whaleTx, Transaction tx) {
+        // Apply institutional-grade risk scoring
+        var riskAssessment = riskEngine.calculateRisk(whaleTx, tx);
+        whaleTx.setRiskScore(riskAssessment.score());
+        whaleTx.setRiskReasons(riskAssessment.reasons());
+    }
+
+    /**
+     * Executes nuclear shutdown with ExecutorService force kill.
+     * T10 Standard lifecycle management.
      */
     @PreDestroy
     public void stop() {

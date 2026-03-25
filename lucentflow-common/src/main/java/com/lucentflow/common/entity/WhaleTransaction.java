@@ -94,6 +94,27 @@ public class WhaleTransaction {
     @Column(name = "rug_risk_level", length = 20)
     private String rugRiskLevel;
 
+    @Column(name = "risk_score")
+    private Integer riskScore;
+
+    public void setRiskScore(Integer riskScore) {
+        this.riskScore = riskScore;
+        if (riskScore != null) {
+            if (riskScore <= 30) {
+                this.rugRiskLevel = "LOW";
+            } else if (riskScore <= 60) {
+                this.rugRiskLevel = "MEDIUM";
+            } else if (riskScore <= 80) {
+                this.rugRiskLevel = "HIGH";
+            } else {
+                this.rugRiskLevel = "CRITICAL";
+            }
+        }
+    }
+
+    @Column(name = "risk_reasons", length = 1000)
+    private String riskReasons;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @CreatedDate
     private Instant createdAt;
