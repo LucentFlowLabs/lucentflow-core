@@ -144,7 +144,8 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                     .valueEth(EthUnitConverter.weiToEther(tx.getValue()))
                     .blockNumber(tx.getBlockNumber().longValue())
                     .gasPrice(tx.getGasPrice())
-                    .isContractCreation(tx.getTo() == null)
+                    .isContractCreation(tx.getTo() == null || tx.getTo().trim().isEmpty())
+                    .timestamp(java.time.Instant.now())
                     .build();
 
             return enrichAsync(whaleTx, tx).exceptionally(e -> {
@@ -159,21 +160,53 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
 
     /**
      * Evaluates if a transaction qualifies as a whale movement or contract deployment.
+     * Implements strict industrial-grade filtering.
      * 
      * @param tx The raw Web3j transaction
      * @return true if the transaction is a whale movement or contract deployment, false otherwise
      */
     private boolean isWhale(Transaction tx) {
-        if (tx == null || tx.getValue() == null) return false;
+        if (tx == null) return false;
         
-        // NEW LOGIC: Always allow contract creations, even if value is 0
-        if (tx.getTo() == null) {
-            return true; // Contract creation - always pass through for anti-rug analysis
+        // 1. Always Capture Contract Creations (0 ETH threshold)
+        if (tx.getTo() == null || tx.getTo().trim().isEmpty()) {
+            log.info("[FILTER-PASS] High-value/Creation detected: 0 ETH");
+            return true;
+        }
+
+        // Handle null values to avoid NPE
+        if (tx.getValue() == null) return false;
+        
+        // Ensure accurate detection of contract calls: input data length > 10 (0x + 8 chars method sig)
+        boolean isContractCall = tx.getInput() != null && tx.getInput().length() > 10;
+        
+        BigDecimal valueInEth = EthUnitConverter.weiToEther(tx.getValue());
+        
+        if (isContractCall) {
+            // Special Exception: Renounce Ownership signature (0x715018a6) -> 0 ETH Threshold
+            if (tx.getInput().contains("715018a6")) {
+                log.info("[FILTER-PASS] {} ETH captured", valueInEth);
+                return true;
+            }
+            
+            // 2. Contract Calls -> 5.0 ETH Threshold
+            if (valueInEth.compareTo(new BigDecimal("5.0")) >= 0) {
+                log.info("[FILTER-PASS] {} ETH captured", valueInEth);
+                return true;
+            } else {
+                log.debug("[FILTER-DROP] Value {} is below threshold for CONTRACT_CALL", valueInEth);
+                return false;
+            }
         }
         
-        // Regular transfers must meet whale threshold
-        return tx.getValue().compareTo(EthUnitConverter.etherStringToWei(
-                String.valueOf(BaseChainConstants.WHALE_THRESHOLD))) > 0;
+        // 3. Regular ETH Transfers -> 10.0 ETH Threshold (Hard limit)
+        if (valueInEth.compareTo(new BigDecimal("10.0")) >= 0) {
+            log.info("[FILTER-PASS] {} ETH captured", valueInEth);
+            return true;
+        } else {
+            log.debug("[FILTER-DROP] Value {} is below threshold for ETH_TRANSFER", valueInEth);
+            return false;
+        }
     }
 
     private CompletableFuture<WhaleTransaction> enrichAsync(WhaleTransaction whaleTx, Transaction tx) {

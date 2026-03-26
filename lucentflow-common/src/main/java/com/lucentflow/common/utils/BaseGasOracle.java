@@ -54,7 +54,7 @@ public class BaseGasOracle {
         cleanupExecutor.scheduleAtFixedRate(BaseGasOracle::cleanupCache, 30, 30, TimeUnit.SECONDS);
         
         // Add shutdown hook to clean up executor
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+        Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
             cleanupExecutor.shutdown();
             try {
                 if (!cleanupExecutor.awaitTermination(5, TimeUnit.SECONDS)) {

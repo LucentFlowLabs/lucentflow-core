@@ -244,12 +244,11 @@ public class PipelineOrchestrator {
             
             // TRANSFORMER + SINK: Process each transaction
             for (Transaction tx : transactions) {
-                var whaleTransaction = transactionTransformer.transformToWhaleTransaction(tx, block);
-                
-                if (whaleTransaction != null) {
-                    // SINK: Save to database (this also publishes events)
-                    whaleDatabaseSink.saveWhaleTransaction(whaleTransaction);
-                }
+                // REDUNDANT SINK REMOVED:
+                // BaseBlockSource now pushes raw transactions to TransactionPipe.
+                // The WhaleAnalysisWorker will handle transformation and database saving.
+                // Doing it here causes duplicate processing and leaks.
+                // log.debug("Transaction {} pushed to pipe via BaseBlockSource", tx.getHash());
             }
             
         } catch (Exception e) {

@@ -274,6 +274,14 @@ public class BaseBlockSource {
      * @return true if there are new blocks, false otherwise
      */
     public boolean hasNewBlocks() {
+        if (lastScannedBlock == null) {
+            log.warn("lastScannedBlock is null during hasNewBlocks check. Re-initializing...");
+            initializeLastScannedBlock();
+            // If it's still null after initialization attempt, fail safely
+            if (lastScannedBlock == null) {
+                return false;
+            }
+        }
         long latestBlock = getLatestBlockNumber();
         if (latestBlock <= lastScannedBlock) {
             log.debug("No new blocks to process");

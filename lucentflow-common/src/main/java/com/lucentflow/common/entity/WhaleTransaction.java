@@ -128,6 +128,9 @@ public class WhaleTransaction {
         Instant now = Instant.now();
         createdAt = now;
         updatedAt = now;
+        if (timestamp == null) {
+            timestamp = now;
+        }
         
         // Auto-detect contract creation if toAddress is null
         if (toAddress == null || toAddress.trim().isEmpty()) {

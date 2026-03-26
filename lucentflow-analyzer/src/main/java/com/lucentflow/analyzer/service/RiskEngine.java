@@ -38,7 +38,7 @@ public class RiskEngine {
         StringBuilder reasons = new StringBuilder();
 
         // 1. Funding Source Analysis (CEX vs. Anonymous Mixers)
-        String riskLevel = whaleTx.getRugRiskLevel() != null ? whaleTx.getRugRiskLevel() : "UNKNOWN";
+        String riskLevel = whaleTx.getRugRiskLevel() != null ? whaleTx.getRugRiskLevel() : "LOW";
         int fundingScore = switch (riskLevel) {
             case "CRITICAL" -> 40;
             case "HIGH" -> 30;
@@ -52,7 +52,8 @@ public class RiskEngine {
         }
 
         // 2. Gas Priority Fee Anomalies (Potential exit liquidity indicators)
-        BigInteger priorityFee = tx.getMaxPriorityFeePerGas();
+        BigInteger priorityFee = tx != null ? tx.getMaxPriorityFeePerGas() : null;
+        BigInteger gasPrice = tx != null ? tx.getGasPrice() : null;
         if (priorityFee != null) {
             // EIP-1559 Transactions
             // A priority fee > 10 Gwei (10,000,000,000 wei) is highly anomalous for L2 networks like Base
@@ -63,7 +64,7 @@ public class RiskEngine {
                 score += 15;
                 reasons.append("Elevated Priority Fee; ");
             }
-        } else if (tx.getGasPrice() != null && tx.getGasPrice().compareTo(BigInteger.valueOf(50_000_000_000L)) > 0) {
+        } else if (gasPrice != null && gasPrice.compareTo(BigInteger.valueOf(50_000_000_000L)) > 0) {
             // Legacy Transaction Fallback
             score += 20;
             reasons.append("High Gas Price Anomaly; ");
@@ -73,13 +74,16 @@ public class RiskEngine {
         if (Boolean.TRUE.equals(whaleTx.getIsContractCreation())) {
             score += 30;
             reasons.append("Fresh Contract Creation; ");
-        } else if (tx.getNonce() != null && tx.getNonce().compareTo(BigInteger.valueOf(10)) < 0) {
-            score += 20;
-            reasons.append("Low Nonce (Freshness Factor); ");
+        } else {
+            BigInteger nonce = tx != null ? tx.getNonce() : null;
+            if (nonce != null && nonce.compareTo(BigInteger.valueOf(10)) < 0) {
+                score += 20;
+                reasons.append("Low Nonce (Freshness Factor); ");
+            }
         }
 
         // 4. Dangerous Method Signature Detection (e.g., renounceOwnership)
-        String input = tx.getInput();
+        String input = tx != null ? tx.getInput() : null;
         if (input != null && (input.startsWith("0x715018a6") || input.contains("715018a6"))) {
             score += 20;
             reasons.append("Renounce Ownership Detected; ");

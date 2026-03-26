@@ -23,7 +23,7 @@ public class ExecutorConfig {
         executor.setCorePoolSize(8);
         executor.setMaxPoolSize(16);
         executor.setQueueCapacity(100);
-        executor.setThreadNamePrefix("indexer-task-");
+        executor.setThreadFactory(Thread.ofVirtual().name("indexer-task-", 0).factory());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(5);
         executor.setRejectedExecutionHandler((r, executor1) -> {

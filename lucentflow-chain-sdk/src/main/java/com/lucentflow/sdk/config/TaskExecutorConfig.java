@@ -39,13 +39,8 @@ public class TaskExecutorConfig {
     public TaskExecutor globalLucentTaskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         
-        // Use custom thread factory for virtual-like performance on Java 17
-        executor.setThreadFactory(runnable -> {
-            Thread thread = new Thread(runnable);
-            thread.setName("global-task-" + thread.getId());
-            thread.setDaemon(true);
-            return thread;
-        });
+        // Use virtual threads via Project Loom (Java 21)
+        executor.setThreadFactory(Thread.ofVirtual().name("global-task-", 0).factory());
         
         // Configure bounded queue for backpressure
         executor.setQueueCapacity(1000);
