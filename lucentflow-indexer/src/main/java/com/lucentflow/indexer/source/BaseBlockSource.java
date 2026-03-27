@@ -12,7 +12,6 @@ import org.web3j.protocol.core.methods.response.EthBlock;
 import org.web3j.protocol.core.methods.response.EthBlockNumber;
 import org.web3j.protocol.core.methods.response.Transaction;
 
-import jakarta.annotation.PostConstruct;
 import java.math.BigInteger;
 import java.time.Duration;
 import java.util.List;
@@ -26,6 +25,9 @@ import org.springframework.beans.factory.ObjectProvider;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.core.functions.CheckedSupplier;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Source component for blockchain data extraction with zero-loss pipeline integration.
@@ -42,7 +44,13 @@ public class BaseBlockSource {
     private final Web3j web3j;
     private final SyncStatusRepository syncStatusRepository;
     private final TransactionPipe transactionPipe;
-    private final org.flywaydb.core.Flyway flyway;
+    
+    // Unified Backpressure Control: Limit active RPC calls across all virtual threads
+    private static final int MAX_CONCURRENT_RPC_CALLS = 2;
+    private final Semaphore rpcSemaphore = new Semaphore(MAX_CONCURRENT_RPC_CALLS);
+    
+    // Virtual Thread Executor for non-blocking Async RPC calls
+    private final ExecutorService rpcExecutor = Executors.newVirtualThreadPerTaskExecutor();
     
     // Whale threshold constant for efficiency
     private static final BigInteger WHALE_THRESHOLD = com.lucentflow.common.utils.EthUnitConverter.etherStringToWei("10");
@@ -55,7 +63,8 @@ public class BaseBlockSource {
         this.web3j = web3j;
         this.syncStatusRepository = syncStatusRepository;
         this.transactionPipe = transactionPipe;
-        this.flyway = flywayProvider.getIfAvailable(); // Becomes null if disabled
+        // Trigger Flyway initialization if present (bean side-effects / migrations).
+        flywayProvider.getIfAvailable();
         
         // Configure retry with exponential backoff
         this.retryConfig = Retry.of("web3jRetry", RetryConfig.custom()
@@ -78,7 +87,11 @@ public class BaseBlockSource {
     }
     
     
-    private Long lastScannedBlock;
+    @org.springframework.beans.factory.annotation.Value("${lucentflow.indexer.start-block:#{null}}")
+    private Long configuredStartBlock;
+
+    // Shared across scheduler executions; ensure visibility across threads.
+    private volatile Long lastScannedBlock;
     
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
@@ -88,41 +101,64 @@ public class BaseBlockSource {
     
     public void initializeLastScannedBlock() {
         try {
-            Optional<SyncStatus> latestStatus = syncStatusRepository.findFirstByOrderByIdDesc();
-            if (latestStatus.isPresent()) {
-                lastScannedBlock = latestStatus.get().getLastScannedBlock();
-                
-                // Genesis Trap Fix: If last_scanned_block is 0, start from current height - 10
-                if (lastScannedBlock == 0) {
-                    EthBlockNumber blockNumber = web3j.ethBlockNumber().send();
-                    long currentHeight = blockNumber.getBlockNumber().longValue();
-                    lastScannedBlock = currentHeight - 10;
-                    
-                    log.info("Genesis Trap detected: last_scanned_block was 0, starting from current height - 10: {}", lastScannedBlock);
-                    
-                    // Update the database with the new starting point
-                    SyncStatus status = latestStatus.get();
-                    status.setLastScannedBlock(lastScannedBlock);
-                    syncStatusRepository.save(status);
-                } else {
-                    log.info("Loaded last scanned block from database: {}", lastScannedBlock);
-                }
-            } else {
-                // Start from current block if no history exists
-                EthBlockNumber blockNumber = web3j.ethBlockNumber().send();
-                lastScannedBlock = blockNumber.getBlockNumber().longValue();
-                log.info("Starting from current block: {}", lastScannedBlock);
-                
-                // Save initial sync status
-                SyncStatus initialStatus = new SyncStatus();
-                initialStatus.setLastScannedBlock(lastScannedBlock);
-                syncStatusRepository.save(initialStatus);
-            }
+            long startBlockToProcess = resolveStartBlock();
+            long resolvedLastScanned = Math.max(0L, startBlockToProcess - 1);
+
+            this.lastScannedBlock = resolvedLastScanned;
+            updateLastScannedBlock(resolvedLastScanned);
+
+            log.info("Resolved start block: startBlockToProcess={} => last_scanned_block={}",
+                    startBlockToProcess, resolvedLastScanned);
         } catch (Exception e) {
-            log.error("Failed to initialize last scanned block - database may not be ready yet", e);
+            log.error("Failed to initialize last scanned block - database or RPC may not be ready yet", e);
             // Don't throw exception - let the application start and retry later
             lastScannedBlock = 0L; // Default fallback
         }
+    }
+
+    /**
+     * Resolve the inclusive start block to process, using the ID 1 protocol.
+     *
+     * <ol>
+     *   <li>If DB has progress in row id=1 and last_scanned_block > 0, return lastScannedBlock + 1.</li>
+     *   <li>Else if configured start block is present (via .env / properties), return it.</li>
+     *   <li>Else return latest - 10.</li>
+     * </ol>
+     *
+     * <p>Note: migration seeds `last_scanned_block=0` as a sentinel. Treat 0 as "no progress".</p>
+     *
+     * @return inclusive block number to start processing
+     */
+    private long resolveStartBlock() {
+        // 1) Prefer DB checkpoint row id=1
+        try {
+            Optional<SyncStatus> statusOpt = syncStatusRepository.findById(1L);
+            if (statusOpt.isPresent()) {
+                Long lastScanned = statusOpt.get().getLastScannedBlock();
+                if (lastScanned != null && lastScanned > 0) {
+                    return lastScanned + 1;
+                }
+                // Genesis Trap/Sentinel Fix: last_scanned_block=0 means "uninitialized"; do not resume from block 1.
+                if (lastScanned != null && lastScanned == 0L) {
+                    log.info("ID=1 checkpoint is sentinel (last_scanned_block=0). Falling back to configured start block / latest-10.");
+                }
+            } else {
+                log.info("ID=1 checkpoint missing. Falling back to configured start block / latest-10.");
+            }
+        } catch (Exception e) {
+            log.warn("Failed to read ID=1 checkpoint progress. Falling back to configured start block / latest-10.", e);
+        }
+
+        // 2) Fallback to configured start block (.env / properties)
+        if (configuredStartBlock != null) {
+            log.info("Using explicitly configured start block from properties/.env: {}", configuredStartBlock);
+            return configuredStartBlock;
+        }
+
+        // 3) Fallback to latest - 10
+        long latestBlock = getLatestBlockNumber();
+        long fallbackStart = latestBlock - 10;
+        return Math.max(0L, fallbackStart);
     }
     
     /**
@@ -158,10 +194,12 @@ public class BaseBlockSource {
     public void updateLastScannedBlock(long blockNumber) {
         this.lastScannedBlock = blockNumber;
         
-        // Persist to database
+        // Persist to database (ensure ID 1 is used to prevent multiple rows)
         try {
-            Optional<SyncStatus> latestStatus = syncStatusRepository.findFirstByOrderByIdDesc();
-            SyncStatus status = latestStatus.orElse(new SyncStatus());
+            SyncStatus status = syncStatusRepository.findById(1L).orElse(new SyncStatus());
+            if (status.getId() == null) {
+                status.setId(1L);
+            }
             status.setLastScannedBlock(blockNumber);
             syncStatusRepository.save(status);
         } catch (Exception e) {
@@ -177,23 +215,40 @@ public class BaseBlockSource {
      */
     public EthBlock.Block fetchBlock(long blockNumber) {
         CheckedSupplier<EthBlock.Block> blockSupplier = Retry.decorateCheckedSupplier(retryConfig, () -> {
-            // Use async request with hard timeout for better resilience
             try {
-            CompletableFuture<EthBlock> future = web3j.ethGetBlockByNumber(
-                DefaultBlockParameter.valueOf(BigInteger.valueOf(blockNumber)), 
-                true
-            ).sendAsync();
-            
-            // Apply hard timeout of 20 seconds
-            EthBlock block = future.orTimeout(20, TimeUnit.SECONDS).get();
-            return block.getBlock();
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            log.warn("Shutdown in progress - rejected web3j async call for block {}: {}", blockNumber, e.getMessage());
-            return null; // Stop the pipeline immediately
-        } catch (NoClassDefFoundError | IllegalStateException e) {
-            log.warn("web3j Async initialization error during shutdown for block {}: {}", blockNumber, e.getMessage());
-            return null;
-        }
+                // Apply strict backpressure using Semaphore
+                rpcSemaphore.acquire();
+                try {
+                    // Execute the blocking RPC call on a virtual thread to prevent ForkJoinPool starvation
+                    CompletableFuture<EthBlock> future = CompletableFuture.supplyAsync(() -> {
+                        try {
+                            return web3j.ethGetBlockByNumber(
+                                DefaultBlockParameter.valueOf(BigInteger.valueOf(blockNumber)), 
+                                true
+                            ).send();
+                        } catch (Exception e) {
+                            throw new RuntimeException("RPC call failed", e);
+                        }
+                    }, rpcExecutor);
+                    
+                    // Apply hard timeout of 60 seconds for stability on public RPC
+                    EthBlock block = future.orTimeout(60, TimeUnit.SECONDS).get();
+                    if (block == null || block.getBlock() == null) {
+                        throw new RuntimeException("Empty block returned from RPC");
+                    }
+                    return block.getBlock();
+                } finally {
+                    rpcSemaphore.release();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Thread interrupted while fetching block " + blockNumber, e);
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                log.warn("Shutdown in progress - rejected task for block {}: {}", blockNumber, e.getMessage());
+                return null;
+            } catch (Exception e) {
+                throw e; // Let Resilience4j handle the retry
+            }
         });
         
         try {
@@ -250,23 +305,6 @@ public class BaseBlockSource {
             return false;
         }
         return tx.getValue().compareTo(WHALE_THRESHOLD) > 0;
-    }
-    
-    /**
-     * Create a simple whale transaction for pipeline processing.
-     * Data integrity: leaves toAddress as NULL for contract creations.
-     * @param tx Web3j transaction
-     * @param block Block containing the transaction
-     * @return Simple whale transaction entity
-     */
-    private com.lucentflow.common.entity.WhaleTransaction createSimpleWhaleTransaction(Transaction tx, EthBlock.Block block) {
-        return com.lucentflow.common.entity.WhaleTransaction.builder()
-                .hash(tx.getHash())
-                .fromAddress(tx.getFrom() != null ? tx.getFrom().toLowerCase() : null)
-                .toAddress(tx.getTo() != null ? tx.getTo().toLowerCase() : null) // Keep NULL for contract creations
-                .valueEth(com.lucentflow.common.utils.EthUnitConverter.weiToEther(tx.getValue()))
-                .blockNumber(block.getNumber().longValue())
-                .build();
     }
     
     /**

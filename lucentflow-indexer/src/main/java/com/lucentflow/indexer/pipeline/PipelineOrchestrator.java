@@ -1,27 +1,21 @@
 package com.lucentflow.indexer.pipeline;
 
-import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
 import com.lucentflow.indexer.source.BaseBlockSource;
-import com.lucentflow.indexer.transformer.TransactionTransformer;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationContext;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.web3j.protocol.core.methods.response.EthBlock;
-import org.web3j.protocol.core.methods.response.Transaction;
 
 import jakarta.annotation.PreDestroy;
+import java.time.Instant;
 import java.util.Random;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * High-throughput blockchain indexing pipeline orchestrator with zero-loss guarantees.
@@ -42,10 +36,8 @@ import java.util.concurrent.Semaphore;
 public class PipelineOrchestrator {
     
     private final BaseBlockSource blockSource;
-    private final TransactionTransformer transactionTransformer;
     private final WhaleDatabaseSink whaleDatabaseSink;
     private final SyncStatusRepository syncStatusRepository;
-    private final ApplicationContext applicationContext;
     private final TransactionPipe transactionPipe;
     private final Random random = new Random();
     
@@ -56,21 +48,20 @@ public class PipelineOrchestrator {
     private volatile boolean isShuttingDown = false;
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;
-    private static final int MAX_CONCURRENT_RPC_CALLS = 5; // Recommended limit for public nodes
-    private final Semaphore rpcSemaphore = new Semaphore(MAX_CONCURRENT_RPC_CALLS);
+
+    // Prevent overlapping scheduled executions from racing checkpoint writes.
+    private final ReentrantLock scanLock = new ReentrantLock();
+    
+    // Removed duplicate Semaphore from Orchestrator as it should be managed inside BaseBlockSource directly
     
     @Autowired
     public PipelineOrchestrator(BaseBlockSource blockSource, 
-                               TransactionTransformer transactionTransformer,
                                WhaleDatabaseSink whaleDatabaseSink,
                                SyncStatusRepository syncStatusRepository,
-                               ApplicationContext applicationContext,
                                TransactionPipe transactionPipe) {
         this.blockSource = blockSource;
-        this.transactionTransformer = transactionTransformer;
         this.whaleDatabaseSink = whaleDatabaseSink;
         this.syncStatusRepository = syncStatusRepository;
-        this.applicationContext = applicationContext;
         this.transactionPipe = transactionPipe;
     }
     
@@ -84,8 +75,11 @@ public class PipelineOrchestrator {
      * @throws RuntimeException if critical pipeline components fail
      */
     @Scheduled(fixedDelay = 2000)
-    @Transactional
     public void scanForNewBlocks() {
+        if (!scanLock.tryLock()) {
+            log.debug("scanForNewBlocks skipped: previous execution still running");
+            return;
+        }
         try {
             if (!blockSource.hasNewBlocks()) {
                 log.debug("No new blocks to process");
@@ -103,14 +97,33 @@ public class PipelineOrchestrator {
             
             log.info("Processing {} blocks: {} to {}", blocksToProcess, startBlock, endBlock);
             
-            if (blocksToProcess > PARALLEL_PROCESSING_THRESHOLD) {
-                processBlocksParallel(startBlock, endBlock);
-            } else {
-                processBlocksSequential(startBlock, endBlock);
+            // Checkpoint/Resume: process in fixed 50-block chunks to bound re-scan on crash.
+            final long chunkSize = 50L;
+            for (long chunkStart = startBlock; chunkStart <= endBlock; chunkStart += chunkSize) {
+                final long chunkEnd = Math.min(chunkStart + chunkSize - 1, endBlock);
+                long blocksInChunk = chunkEnd - chunkStart + 1;
+                
+                if (blocksInChunk > PARALLEL_PROCESSING_THRESHOLD) {
+                    processBlocksParallel(chunkStart, chunkEnd);
+                } else {
+                    processBlocksSequential(chunkStart, chunkEnd);
+                }
+                
+                // CHECKPOINT: persist progress using ID 1 Protocol after each chunk.
+                checkpointProgress(chunkEnd, endBlock);
+                
+                // Inter-batch Delay: Allow public node rate-limiter to reset
+                if (chunkEnd < endBlock) {
+                    try {
+                        Thread.sleep(3000);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.warn("Pipeline orchestrator interrupted during inter-batch delay");
+                        break;
+                    }
+                }
             }
             
-            // Update sync status only after successful processing
-            updateSyncStatus(endBlock);
             log.info("Completed processing up to block {}", endBlock);
             
         } catch (Exception e) {
@@ -120,6 +133,8 @@ public class PipelineOrchestrator {
             } else {
                 log.warn("Pipeline orchestrator interrupted during shutdown: {}", e.getMessage());
             }
+        } finally {
+            scanLock.unlock();
         }
     }
     
@@ -193,22 +208,13 @@ public class PipelineOrchestrator {
                             return;
                         }
                         
-                        // Acquire RPC semaphore before making any RPC calls
-                        rpcSemaphore.acquire();
-                        try {
-                            // Check shutdown flag before processing
-                            if (isShuttingDown || Thread.currentThread().isInterrupted()) {
-                                log.warn("Pipeline shutting down. Aborting parallel block processing.");
-                                return;
-                            }
-                            processBlock(currentBlock);
-                        } finally {
-                            // Always release semaphore
-                            rpcSemaphore.release();
+                        // Check shutdown flag before processing
+                        if (isShuttingDown || Thread.currentThread().isInterrupted()) {
+                            log.warn("Pipeline shutting down. Aborting parallel block processing.");
+                            return;
                         }
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        log.warn("Block processing interrupted for block {}", currentBlock);
+                        
+                        processBlock(currentBlock);
                     } catch (Exception e) {
                         if (!(e instanceof InterruptedException)) {
                             log.error("Error processing block {} in parallel", currentBlock, e);
@@ -242,19 +248,12 @@ public class PipelineOrchestrator {
             
             log.debug("Processing block {} with {} transactions", blockNumber, transactions.size());
             
-            // TRANSFORMER + SINK: Process each transaction
-            for (Transaction tx : transactions) {
-                // REDUNDANT SINK REMOVED:
-                // BaseBlockSource now pushes raw transactions to TransactionPipe.
-                // The WhaleAnalysisWorker will handle transformation and database saving.
-                // Doing it here causes duplicate processing and leaks.
-                // log.debug("Transaction {} pushed to pipe via BaseBlockSource", tx.getHash());
-            }
-            
+            // BaseBlockSource pushes whale transactions to TransactionPipe.
+            // Pipeline processing of those transactions happens asynchronously downstream.
         } catch (Exception e) {
             if (!(e instanceof InterruptedException)) {
-                log.error("Failed to process block {}", blockNumber, e);
-                throw new RuntimeException("Block processing failed", e);
+                log.warn("[RESILIENCE] Block {} failed after retries and was skipped: {}", blockNumber, e.getMessage());
+                // Do not throw an exception. We want to skip this block and continue the pipeline.
             } else {
                 log.warn("Block processing interrupted for block {}: {}", blockNumber, e.getMessage());
                 throw new RuntimeException("Block processing interrupted", e);
@@ -271,20 +270,31 @@ public class PipelineOrchestrator {
      * @param lastProcessedBlock The highest block number successfully processed
      * @throws RuntimeException if status update fails (critical error)
      */
-    private void updateSyncStatus(long lastProcessedBlock) {
+    private void checkpointProgress(long lastProcessedBlock, long targetEndBlock) {
         try {
-            var latestStatus = syncStatusRepository.findFirstByOrderByIdDesc();
-            SyncStatus status = latestStatus.orElse(new SyncStatus());
-            status.setLastScannedBlock(lastProcessedBlock);
-            syncStatusRepository.save(status);
-            log.debug("Updated sync status to block {}", lastProcessedBlock);
+            int updated = syncStatusRepository.updateProgress(1L, lastProcessedBlock, Instant.now());
+            if (updated == 0) {
+                // If the row doesn't exist (unexpected), create it via the existing initializer save,
+                // then retry the deterministic updateProgress call.
+                blockSource.updateLastScannedBlock(lastProcessedBlock);
+                updated = syncStatusRepository.updateProgress(1L, lastProcessedBlock, Instant.now());
+                if (updated == 0) {
+                    throw new IllegalStateException("sync_status row id=1 missing; cannot persist checkpoint");
+                }
+            }
+
+            // Keep in-memory pointer aligned for subsequent scans inside same JVM.
+            blockSource.updateLastScannedBlock(lastProcessedBlock);
+
+            log.info("[CHECKPOINT] Saved progress: last_scanned_block={} (target_end_block={})",
+                    lastProcessedBlock, targetEndBlock);
         } catch (Exception e) {
             if (!(e instanceof InterruptedException)) {
-                log.error("Failed to update sync status for block {}", lastProcessedBlock, e);
-                throw new RuntimeException("Sync status update failed", e);
+                log.error("Failed to checkpoint progress at block {}", lastProcessedBlock, e);
+                throw new RuntimeException("Checkpoint update failed", e);
             } else {
-                log.warn("Sync status update interrupted for block {}: {}", lastProcessedBlock, e.getMessage());
-                throw new RuntimeException("Sync status update interrupted", e);
+                log.warn("Checkpoint interrupted for block {}: {}", lastProcessedBlock, e.getMessage());
+                throw new RuntimeException("Checkpoint interrupted", e);
             }
         }
     }

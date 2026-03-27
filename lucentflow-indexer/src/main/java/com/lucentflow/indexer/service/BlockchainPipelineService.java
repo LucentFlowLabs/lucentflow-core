@@ -4,7 +4,6 @@ import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.source.BaseBlockSource;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.web3j.protocol.core.methods.response.EthBlock;
 import org.web3j.protocol.core.methods.response.Transaction;
@@ -12,7 +11,6 @@ import org.web3j.protocol.core.methods.response.Transaction;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -45,6 +43,7 @@ import java.util.concurrent.TimeoutException;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@Deprecated(forRemoval = true, since = "1.0")
 public class BlockchainPipelineService {
     
     private final BaseBlockSource blockSource;
@@ -72,8 +71,8 @@ public class BlockchainPipelineService {
      *   <li>Apply backpressure with semaphore throttling</li>
      * </ul>
      */
-    @Scheduled(fixedDelay = 2000)
     public void scanForNewBlocks() {
+        log.warn("BlockchainPipelineService is deprecated and must not be scheduled. PipelineOrchestrator is the single source of truth.");
         log.info("Scanner heartbeat: checking for new blocks...");
         
         try {
@@ -252,10 +251,11 @@ public class BlockchainPipelineService {
             log.debug("Processed transaction {} from block {}", tx.getHash(), block.getNumber());
             
         } catch (Exception e) {
-            log.error("Failed to process transaction {} in block {}", 
-                      tx.getHash(), block.getNumber(), e);
+            String hash = (tx == null ? null : tx.getHash());
+            log.error("Failed to process transaction {} in block {}",
+                      hash, block.getNumber(), e);
             // Don't throw exception to prevent pipeline stop
-            log.warn("Continuing with next transaction despite transaction {} failure", tx.getHash());
+            log.warn("Continuing with next transaction despite transaction {} failure", hash);
         }
     }
     

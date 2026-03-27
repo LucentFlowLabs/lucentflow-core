@@ -132,10 +132,10 @@ public class Web3jAutoConfiguration {
         ConnectionPool connectionPool = new ConnectionPool(50, 5, TimeUnit.MINUTES);
 
         return new OkHttpClient.Builder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .readTimeout(Duration.ofSeconds(30))
+                .connectTimeout(Duration.ofSeconds(30))
+                .readTimeout(Duration.ofSeconds(90))
                 .writeTimeout(Duration.ofSeconds(30))
-                .callTimeout(Duration.ofSeconds(60))
+                .callTimeout(Duration.ofSeconds(120))
                 .connectionPool(connectionPool)
                 .dispatcher(dispatcher)
                 .retryOnConnectionFailure(true)

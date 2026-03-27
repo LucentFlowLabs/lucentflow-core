@@ -48,6 +48,8 @@ lucentflow:
   basescan:
     api-key: ${BASESCAN_API_KEY}
     base-url: ${BASESCAN_BASE_URL:https://api.basescan.org/api}
+  indexer:
+    start-block: ${LUCENTFLOW_INDEXER_START_BLOCK:}
 
 logging:
   file:

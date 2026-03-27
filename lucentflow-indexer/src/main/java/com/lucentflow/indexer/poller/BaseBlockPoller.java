@@ -3,10 +3,8 @@ package com.lucentflow.indexer.poller;
 import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.web3j.protocol.Web3j;
@@ -15,7 +13,6 @@ import org.web3j.protocol.core.methods.response.EthBlock;
 import org.web3j.protocol.core.methods.response.EthBlockNumber;
 import org.web3j.protocol.core.methods.response.Transaction;
 
-import jakarta.annotation.PostConstruct;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Optional;
@@ -38,19 +35,20 @@ import org.springframework.beans.factory.ObjectProvider;
  */
 @Slf4j
 @Component
+@Deprecated(forRemoval = true, since = "1.0")
 public class BaseBlockPoller {
     
     private final Web3j web3j;
     private final TransactionPipe transactionPipe;
     private final SyncStatusRepository syncStatusRepository;
-    private final org.flywaydb.core.Flyway flyway;
     
     @Autowired
     public BaseBlockPoller(Web3j web3j, TransactionPipe transactionPipe, SyncStatusRepository syncStatusRepository, ObjectProvider<org.flywaydb.core.Flyway> flywayProvider) {
         this.web3j = web3j;
         this.transactionPipe = transactionPipe;
         this.syncStatusRepository = syncStatusRepository;
-        this.flyway = flywayProvider.getIfAvailable(); // Becomes null if disabled
+        // Trigger Flyway initialization if present (bean side-effects / migrations).
+        flywayProvider.getIfAvailable();
     }
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;
@@ -97,10 +95,10 @@ public class BaseBlockPoller {
      * Main scheduled polling method.
      * Runs every 2 seconds to check for new blocks and push transactions to pipe.
      */
-    @Scheduled(fixedDelay = 2000)
     @Transactional
     public void pollForNewBlocks() {
         try {
+            log.warn("BaseBlockPoller is deprecated and should not be scheduled. PipelineOrchestrator is the single source of truth.");
             BigInteger latestBlock = getLatestBlockNumber();
             long latestBlockLong = latestBlock.longValue();
             

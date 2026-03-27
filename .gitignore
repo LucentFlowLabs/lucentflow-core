@@ -5,6 +5,7 @@
 *.swp
 *.swo
 *.trae
+*.cursor
 *~
 
 # Maven Build Files
