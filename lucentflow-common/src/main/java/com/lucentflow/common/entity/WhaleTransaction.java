@@ -115,6 +115,9 @@ public class WhaleTransaction {
     @Column(name = "risk_reasons", length = 1000)
     private String riskReasons;
 
+    @Column(name = "execution_status", length = 20)
+    private String executionStatus;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @CreatedDate
     private Instant createdAt;

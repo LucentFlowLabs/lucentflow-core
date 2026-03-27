@@ -1,12 +1,13 @@
 package com.lucentflow.analyzer.worker;
 
-import com.lucentflow.analyzer.service.AddressLabeler;
-import com.lucentflow.indexer.sink.WhaleDatabaseSink;
-import com.lucentflow.indexer.service.CreatorFundingTracer;
 import com.lucentflow.common.constant.BaseChainConstants;
 import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.common.utils.EthUnitConverter;
 import com.lucentflow.common.pipeline.TransactionPipe;
+import com.lucentflow.analyzer.service.AddressLabeler;
+import com.lucentflow.indexer.source.BaseBlockSource;
+import com.lucentflow.indexer.sink.WhaleDatabaseSink;
+import com.lucentflow.indexer.service.CreatorFundingTracer;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +43,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private final WhaleDatabaseSink whaleDatabaseSink;
     private final CreatorFundingTracer creatorFundingTracer;
     private final com.lucentflow.analyzer.service.RiskEngine riskEngine;
+    private final BaseBlockSource blockSource;
     
     private final AtomicLong processedCount = new AtomicLong(0);
     private final AtomicLong whaleCount = new AtomicLong(0);
@@ -219,35 +221,46 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         whaleTx.setWhaleCategory(BaseChainConstants.classifyWhaleSize(value));
         whaleTx.setFromAddressTag(fromLabel);
         whaleTx.setToAddressTag(toLabel);
-        
+
+        CompletableFuture<WhaleTransaction> baseFuture;
         // Anti-Rug Trace: Enrich contract creations with funding analysis
         if (whaleTx.getIsContractCreation()) {
-            return creatorFundingTracer.enrichRugMetrics(whaleTx)
-                .thenApply(enriched -> {
-                    if (enriched != null) {
-                        whaleTx.setFundingSourceAddress(enriched.getFundingSourceAddress());
-                        whaleTx.setFundingSourceTag(enriched.getFundingSourceTag());
-                        whaleTx.setRugRiskLevel(enriched.getRugRiskLevel());
-                        
-                        // Log risk alerts for high/critical levels
-                        if ("HIGH".equals(enriched.getRugRiskLevel()) || "CRITICAL".equals(enriched.getRugRiskLevel())) {
-                            log.warn("[RUG-ALERT] High risk contract detected! Creator: {}, Source: {}, Risk: {}", 
-                                    whaleTx.getFromAddress(), enriched.getFundingSourceTag(), enriched.getRugRiskLevel());
+            baseFuture = creatorFundingTracer.enrichRugMetrics(whaleTx)
+                    .thenApply(enriched -> {
+                        if (enriched != null) {
+                            whaleTx.setFundingSourceAddress(enriched.getFundingSourceAddress());
+                            whaleTx.setFundingSourceTag(enriched.getFundingSourceTag());
+                            whaleTx.setRugRiskLevel(enriched.getRugRiskLevel());
+
+                            // Log risk alerts for high/critical levels
+                            if ("HIGH".equals(enriched.getRugRiskLevel()) || "CRITICAL".equals(enriched.getRugRiskLevel())) {
+                                log.warn("[RUG-ALERT] High risk contract detected! Creator: {}, Source: {}, Risk: {}", 
+                                        whaleTx.getFromAddress(), enriched.getFundingSourceTag(), enriched.getRugRiskLevel());
+                            }
                         }
-                    }
-                    applyRiskScoring(whaleTx, tx);
-                    return whaleTx;
-                })
-                .exceptionally(e -> {
-                    log.warn("Failed to enrich rug metrics for contract {}: {}", whaleTx.getHash(), e.getMessage());
-                    // Continue processing without rug analysis to prevent pipeline disruption
-                    applyRiskScoring(whaleTx, tx);
-                    return whaleTx;
-                });
+                        return whaleTx;
+                    })
+                    .exceptionally(e -> {
+                        log.warn("Failed to enrich rug metrics for contract {}: {}", whaleTx.getHash(), e.getMessage());
+                        // Continue processing without rug analysis to prevent pipeline disruption
+                        return whaleTx;
+                    });
         } else {
-            applyRiskScoring(whaleTx, tx);
-            return CompletableFuture.completedFuture(whaleTx);
+            baseFuture = CompletableFuture.completedFuture(whaleTx);
         }
+
+        // Transaction Integrity Audit: attach on-chain execution status (via BaseBlockSource semaphore) and apply risk scoring.
+        return baseFuture
+                .thenCompose(enrichedTx ->
+                        blockSource.fetchExecutionStatusAsync(tx.getHash())
+                                .thenApply(status -> {
+                                    if (status != null) {
+                                        enrichedTx.setExecutionStatus(status);
+                                    }
+                                    applyRiskScoring(enrichedTx, tx);
+                                    applyRevertRiskAdjustment(enrichedTx);
+                                    return enrichedTx;
+                                }));
     }
 
     /**
@@ -261,6 +274,34 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         var riskAssessment = riskEngine.calculateRisk(whaleTx, tx);
         whaleTx.setRiskScore(riskAssessment.score());
         whaleTx.setRiskReasons(riskAssessment.reasons());
+    }
+
+    /**
+     * Adjusts risk score and reasons for reverted transactions as part of the
+     * Transaction Integrity Audit module.
+     *
+     * @param whaleTx Whale transaction to adjust
+     */
+    private void applyRevertRiskAdjustment(WhaleTransaction whaleTx) {
+        if (whaleTx == null) {
+            return;
+        }
+
+        if (!"REVERTED".equals(whaleTx.getExecutionStatus())) {
+            return;
+        }
+
+        Integer baseScore = whaleTx.getRiskScore();
+        int adjustedScore = (baseScore == null ? 0 : baseScore) + 40;
+        whaleTx.setRiskScore(adjustedScore);
+
+        String baseReasons = whaleTx.getRiskReasons();
+        String reason = "On-chain Reverted Transaction (Potential Exploit Attempt)";
+        if (baseReasons == null || baseReasons.isBlank()) {
+            whaleTx.setRiskReasons(reason);
+        } else if (!baseReasons.contains(reason)) {
+            whaleTx.setRiskReasons(baseReasons + " | " + reason);
+        }
     }
 
     /**

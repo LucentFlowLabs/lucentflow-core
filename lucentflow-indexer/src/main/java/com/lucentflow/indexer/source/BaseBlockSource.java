@@ -10,6 +10,7 @@ import org.web3j.protocol.Web3j;
 import org.web3j.protocol.core.DefaultBlockParameter;
 import org.web3j.protocol.core.methods.response.EthBlock;
 import org.web3j.protocol.core.methods.response.EthBlockNumber;
+import org.web3j.protocol.core.methods.response.EthGetTransactionReceipt;
 import org.web3j.protocol.core.methods.response.Transaction;
 
 import java.math.BigInteger;
@@ -47,7 +48,7 @@ public class BaseBlockSource {
     
     // Unified Backpressure Control: Limit active RPC calls across all virtual threads
     private static final int MAX_CONCURRENT_RPC_CALLS = 2;
-    private final Semaphore rpcSemaphore = new Semaphore(MAX_CONCURRENT_RPC_CALLS);
+    private final Semaphore rpcSemaphore = new Semaphore(MAX_CONCURRENT_RPC_CALLS, true);
     
     // Virtual Thread Executor for non-blocking Async RPC calls
     private final ExecutorService rpcExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -217,6 +218,7 @@ public class BaseBlockSource {
         CheckedSupplier<EthBlock.Block> blockSupplier = Retry.decorateCheckedSupplier(retryConfig, () -> {
             try {
                 // Apply strict backpressure using Semaphore
+                log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcSemaphore.getQueueLength());
                 rpcSemaphore.acquire();
                 try {
                     // Execute the blocking RPC call on a virtual thread to prevent ForkJoinPool starvation
@@ -262,6 +264,43 @@ public class BaseBlockSource {
             }
             throw new RuntimeException("Failed to fetch block " + blockNumber, e);
         }
+    }
+
+    /**
+     * Fetches transaction receipt execution status with unified backpressure control.
+     *
+     * <p>This method is guarded by the same {@code rpcSemaphore} used for block fetches to ensure
+     * the public RPC node is not overwhelmed. Fair semaphore ordering (FIFO) prevents starvation
+     * across block and receipt requests.</p>
+     *
+     * @param txHash transaction hash
+     * @return CompletableFuture resolving to "SUCCESS", "REVERTED" or null when unavailable
+     */
+    public CompletableFuture<String> fetchExecutionStatusAsync(String txHash) {
+        if (txHash == null || txHash.isBlank()) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcSemaphore.getQueueLength());
+                rpcSemaphore.acquire();
+                try {
+                    CompletableFuture<EthGetTransactionReceipt> future = web3j.ethGetTransactionReceipt(txHash).sendAsync();
+                    EthGetTransactionReceipt response = future.orTimeout(10, TimeUnit.SECONDS).join();
+                    if (response == null || response.getTransactionReceipt().isEmpty()) {
+                        return null;
+                    }
+                    var receipt = response.getTransactionReceipt().get();
+                    return receipt.isStatusOK() ? "SUCCESS" : "REVERTED";
+                } finally {
+                    rpcSemaphore.release();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while fetching receipt for " + txHash, e);
+            }
+        }, rpcExecutor);
     }
     
     /**
