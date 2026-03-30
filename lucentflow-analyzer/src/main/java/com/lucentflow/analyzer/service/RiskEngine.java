@@ -31,9 +31,10 @@ public class RiskEngine {
      * 
      * @param whaleTx The enriched whale transaction containing pre-computed risk levels
      * @param tx The raw Web3j transaction containing execution parameters (gas, input data)
+     * @param recentDeploymentCount contract creations from the same {@code from} in the lookback window (e.g. 10 minutes)
      * @return A {@link RiskAssessment} containing the final bounded score and descriptive reasons
      */
-    public RiskAssessment calculateRisk(WhaleTransaction whaleTx, Transaction tx) {
+    public RiskAssessment calculateRisk(WhaleTransaction whaleTx, Transaction tx, int recentDeploymentCount) {
         int score = 0;
         StringBuilder reasons = new StringBuilder();
 
@@ -87,6 +88,14 @@ public class RiskEngine {
         if (input != null && (input.startsWith("0x715018a6") || input.contains("715018a6"))) {
             score += 20;
             reasons.append("Renounce Ownership Detected; ");
+        }
+
+        // 5. Serial deployer / contract factory pattern (multiple creations from same EOA in a short window)
+        if (recentDeploymentCount > 2) {
+            score += 25;
+            reasons.append("Serial Deployment Pattern Detected (")
+                    .append(recentDeploymentCount)
+                    .append(" deployments in 10m); ");
         }
 
         // Bound final score to maximum of 100

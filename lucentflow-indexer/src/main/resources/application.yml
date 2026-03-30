@@ -7,9 +7,11 @@ spring:
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
-      connection-timeout: 20000
+      # Monday-morning resilience: recycle connections before PG/firewall idle kills; keep TCP alive over long idle (e.g. weekends).
+      connection-timeout: 60000
       idle-timeout: 300000
-      max-lifetime: 1200000
+      max-lifetime: 600000
+      keepalive-time: 30000
       leak-detection-threshold: 2000
       
   jpa:
@@ -61,6 +63,9 @@ management:
 
 # Basescan API Configuration
 lucentflow:
+  chain:
+    # Zero-config default: Base mainnet public RPC; override with LUCENTFLOW_CHAIN_RPC_URL for professional endpoints
+    rpc-url: ${LUCENTFLOW_CHAIN_RPC_URL:https://mainnet.base.org}
   basescan:
     api-key: ${BASESCAN_API_KEY:}
     base-url: https://api.basescan.org/api

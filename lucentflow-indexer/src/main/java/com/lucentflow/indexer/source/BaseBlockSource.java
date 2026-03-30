@@ -3,6 +3,7 @@ package com.lucentflow.indexer.source;
 import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
+import com.lucentflow.sdk.config.RpcProviderConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -46,10 +47,9 @@ public class BaseBlockSource {
     private final Web3j web3j;
     private final SyncStatusRepository syncStatusRepository;
     private final TransactionPipe transactionPipe;
-    
-    // Unified Backpressure Control: Limit active RPC calls across all virtual threads
-    private static final int MAX_CONCURRENT_RPC_CALLS = 2;
-    private final Semaphore rpcSemaphore = new Semaphore(MAX_CONCURRENT_RPC_CALLS, true);
+
+    /** Unified backpressure: permit count from {@link RpcProviderConfig} (professional vs public RPC). */
+    private final Semaphore rpcSemaphore;
     
     // Virtual Thread Executor for non-blocking Async RPC calls
     private final ExecutorService rpcExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -64,10 +64,22 @@ public class BaseBlockSource {
     private final Retry retryConfig;
     
     @Autowired
-    public BaseBlockSource(Web3j web3j, SyncStatusRepository syncStatusRepository, TransactionPipe transactionPipe, ObjectProvider<org.flywaydb.core.Flyway> flywayProvider) {
+    public BaseBlockSource(Web3j web3j,
+                           SyncStatusRepository syncStatusRepository,
+                           TransactionPipe transactionPipe,
+                           RpcProviderConfig rpcProviderConfig,
+                           ObjectProvider<org.flywaydb.core.Flyway> flywayProvider) {
         this.web3j = web3j;
         this.syncStatusRepository = syncStatusRepository;
         this.transactionPipe = transactionPipe;
+        int permits = rpcProviderConfig.recommendedRpcSemaphorePermits();
+        this.rpcSemaphore = new Semaphore(permits, true);
+        String optimizationMode = switch (rpcProviderConfig.providerType()) {
+            case PROFESSIONAL -> "high-throughput concurrent RPC (%d permits)".formatted(permits);
+            case PUBLIC -> "conservative public-RPC throttling (%d permits)".formatted(permits);
+        };
+        log.info("[RPC-DETECTION] Detected {} endpoint. Optimized for {}.",
+                rpcProviderConfig.providerType(), optimizationMode);
         // Trigger Flyway initialization if present (bean side-effects / migrations).
         flywayProvider.getIfAvailable();
         
@@ -248,7 +260,8 @@ public class BaseBlockSource {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("Thread interrupted while fetching block " + blockNumber, e);
+                log.warn("[SOFT-INTERRUPT] Block {} fetch interrupted; returning null for orchestrator soft-fail", blockNumber);
+                return null;
             } catch (java.util.concurrent.RejectedExecutionException e) {
                 log.warn("Shutdown in progress - rejected task for block {}: {}", blockNumber, e.getMessage());
                 return null;

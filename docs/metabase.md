@@ -1,5 +1,13 @@
+<!--
+  LucentFlow Metabase SQL specification (dashboard source of truth).
+  @author ArchLucent
+  @since 1.0
+-->
 # LucentFlow BI Intelligence: Metabase SQL Specification
 This document serves as the Source of Truth for the LucentFlow monitoring dashboards. It defines the SQL logic used to transform raw Base chain transaction data into actionable security intelligence.
+
+**Schema alignment (v1.1+):** The `whale_transactions` table exposes analyzer outputs including `risk_score`, `risk_reasons`, `rug_risk_level`, `execution_status` (`SUCCESS` | `REVERTED`), and genesis fields `funding_source_address` / `funding_source_tag`. Dashboard SQL below references these where they add signal (especially Security Sentinel).
+
 ## 📊 Dashboard Overview
 The LucentFlow command center is divided into four critical analytical dimensions:
 Whale Sentinel: Real-time capital flow tracking.
@@ -29,22 +37,28 @@ LIMIT 10;
 * Visualization: Table
 * Format: Highlight Total Inflow (ETH) > 100 with red background for immediate whale alert.
 ## 2. Security Sentinel: High-Risk Contract Calls
-Objective: Real-time feed of large-value interactions with smart contracts, filtering for potential "Soft-Rugs" or whale exits.
+Objective: Real-time feed of large-value interactions with smart contracts, filtering for potential "Soft-Rugs" or whale exits. Incorporates **risk_score** and on-chain **execution_status** from the Transaction Integrity / risk pipeline.
 ```sql
 SELECT
     timestamp AS "Time (UTC)",
     '🛡️ ' || SUBSTRING(from_address FROM 1 FOR 6) || '...' || SUBSTRING(from_address FROM 38 FOR 4) AS "Initiator",
     '📜 ' || SUBSTRING(to_address FROM 1 FOR 6) || '...' || SUBSTRING(to_address FROM 38 FOR 4) AS "Target Contract",
     ROUND(value_eth::numeric, 2) AS "Value (ETH)",
+    COALESCE(risk_score, 0) AS "Risk Score",
+    COALESCE(execution_status, 'UNKNOWN') AS "Execution Status",
     CASE
+        WHEN execution_status = 'REVERTED' THEN '⚠️ REVERTED (integrity flag)'
+        WHEN COALESCE(risk_score, 0) >= 80 THEN '🔴 CRITICAL RISK'
+        WHEN COALESCE(risk_score, 0) >= 50 THEN '🟠 ELEVATED RISK'
         WHEN value_eth > 500 THEN '🔴 CRITICAL: WHALE EXIT?'
         WHEN value_eth > 100 THEN '🟠 WARNING: LARGE MOVE'
         ELSE '🟢 REGULAR CALL'
         END AS "Security Alert",
+    LEFT(COALESCE(funding_source_tag, ''), 32) AS "Funding Tag",
     hash AS "tx_hash"
 FROM whale_transactions
 WHERE transaction_type = 'CONTRACT_CALL'
-ORDER BY timestamp DESC
+ORDER BY risk_score DESC, timestamp DESC
 LIMIT 20;
 ```
 * Visualization: Table

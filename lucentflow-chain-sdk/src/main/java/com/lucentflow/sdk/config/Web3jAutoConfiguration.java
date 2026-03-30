@@ -16,7 +16,6 @@ import java.time.Duration;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import jakarta.annotation.PreDestroy;
 
@@ -161,6 +160,23 @@ public class Web3jAutoConfiguration {
         
         // Build Web3j with virtual thread executor for async operations (5000ms polling interval)
         return Web3j.build(httpService, 5000, web3jExecutorService);
+    }
+
+    /**
+     * Smart dual-channel RPC: derives semaphore permits, pipeline chunk size, and inter-batch sleep
+     * from the configured endpoint URL (professional vs public).
+     *
+     * @param properties bound {@code lucentflow.chain} properties (including {@code rpc-url})
+     * @return immutable recommended limits for indexer components
+     */
+    @Bean
+    public RpcProviderConfig rpcProviderConfig(Web3jProperties properties) {
+        RpcProviderType type = RpcProviderType.fromRpcUrl(properties.getRpcUrl());
+        // Alchemy / QuickNode / Infura / BlastAPI: 20 fair RPC permits + 200-block checkpoint chunks (no inter-batch sleep).
+        return switch (type) {
+            case PROFESSIONAL -> new RpcProviderConfig(type, 20, 200, 0L);
+            case PUBLIC -> new RpcProviderConfig(type, 2, 50, 3000L);
+        };
     }
 
     /**

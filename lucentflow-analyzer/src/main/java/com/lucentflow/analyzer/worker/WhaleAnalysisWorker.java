@@ -5,6 +5,7 @@ import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.common.utils.EthUnitConverter;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.analyzer.service.AddressLabeler;
+import com.lucentflow.indexer.repository.WhaleTransactionRepository;
 import com.lucentflow.indexer.source.BaseBlockSource;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
 import com.lucentflow.indexer.service.CreatorFundingTracer;
@@ -16,6 +17,8 @@ import org.springframework.stereotype.Component;
 import org.web3j.protocol.core.methods.response.Transaction;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -44,6 +47,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private final CreatorFundingTracer creatorFundingTracer;
     private final com.lucentflow.analyzer.service.RiskEngine riskEngine;
     private final BaseBlockSource blockSource;
+    private final WhaleTransactionRepository whaleTransactionRepository;
     
     private final AtomicLong processedCount = new AtomicLong(0);
     private final AtomicLong whaleCount = new AtomicLong(0);
@@ -309,10 +313,28 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
      * @param tx The raw Web3j transaction
      */
     private void applyRiskScoring(WhaleTransaction whaleTx, Transaction tx) {
-        // Apply institutional-grade risk scoring
-        var riskAssessment = riskEngine.calculateRisk(whaleTx, tx);
+        int recentDeploymentCount = countRecentDeploymentsForInitiator(tx.getFrom());
+        var riskAssessment = riskEngine.calculateRisk(whaleTx, tx, recentDeploymentCount);
         whaleTx.setRiskScore(riskAssessment.score());
         whaleTx.setRiskReasons(riskAssessment.reasons());
+    }
+
+    /**
+     * Serial deployer signal: persisted contract creations from this initiator in the last 10 minutes.
+     * Current tx is usually not persisted yet; cross-batch factory behavior still surfaces here.
+     */
+    private int countRecentDeploymentsForInitiator(String fromAddress) {
+        if (fromAddress == null || fromAddress.isBlank()) {
+            return 0;
+        }
+        try {
+            Instant since = Instant.now().minus(10, ChronoUnit.MINUTES);
+            long n = whaleTransactionRepository.countRecentDeployments(fromAddress, since);
+            return n > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) n;
+        } catch (Exception e) {
+            log.warn("[SERIAL-DEPLOYER] countRecentDeployments failed for {}: {}", fromAddress, e.getMessage());
+            return 0;
+        }
     }
 
     /**

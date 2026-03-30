@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -35,6 +36,17 @@ public interface WhaleTransactionRepository extends JpaRepository<WhaleTransacti
      * @return Optional containing the whale transaction if exists
      */
     Optional<WhaleTransaction> findByHash(String hash);
+
+    /**
+     * Count contract-creation whale transactions from the same initiator after a time boundary.
+     * Optimized for serial deployer / factory heuristics (indexed {@code from_address} + {@code timestamp}, creations-only).
+     *
+     * @param fromAddress transaction initiator (deployer)
+     * @param since       exclusive lower bound on {@link WhaleTransaction#getTimestamp()}
+     * @return number of matching rows
+     */
+    @Query("SELECT COUNT(w) FROM WhaleTransaction w WHERE w.fromAddress = :fromAddress AND w.isContractCreation = true AND w.timestamp > :since")
+    long countRecentDeployments(@Param("fromAddress") String fromAddress, @Param("since") Instant since);
     
     /**
      * Check if whale transaction exists by hash (optimized for batch operations)

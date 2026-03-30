@@ -4,8 +4,10 @@ import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
 import com.lucentflow.indexer.source.BaseBlockSource;
+import com.lucentflow.sdk.config.RpcProviderConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.web3j.protocol.core.methods.response.EthBlock;
@@ -39,6 +41,7 @@ public class PipelineOrchestrator {
     private final WhaleDatabaseSink whaleDatabaseSink;
     private final SyncStatusRepository syncStatusRepository;
     private final TransactionPipe transactionPipe;
+    private final JdbcTemplate jdbcTemplate;
     private final Random random = new Random();
     
     // T10 Standard: Private Virtual Thread Executor to prevent ForkJoinPool leaks
@@ -49,20 +52,28 @@ public class PipelineOrchestrator {
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;
 
+    private final long pipelineChunkSize;
+    private final long interBatchSleepMillis;
+
     // Prevent overlapping scheduled executions from racing checkpoint writes.
     private final ReentrantLock scanLock = new ReentrantLock();
     
     // Removed duplicate Semaphore from Orchestrator as it should be managed inside BaseBlockSource directly
     
     @Autowired
-    public PipelineOrchestrator(BaseBlockSource blockSource, 
-                               WhaleDatabaseSink whaleDatabaseSink,
-                               SyncStatusRepository syncStatusRepository,
-                               TransactionPipe transactionPipe) {
+    public PipelineOrchestrator(BaseBlockSource blockSource,
+                                WhaleDatabaseSink whaleDatabaseSink,
+                                SyncStatusRepository syncStatusRepository,
+                                TransactionPipe transactionPipe,
+                                RpcProviderConfig rpcProviderConfig,
+                                JdbcTemplate jdbcTemplate) {
         this.blockSource = blockSource;
         this.whaleDatabaseSink = whaleDatabaseSink;
         this.syncStatusRepository = syncStatusRepository;
         this.transactionPipe = transactionPipe;
+        this.jdbcTemplate = jdbcTemplate;
+        this.pipelineChunkSize = rpcProviderConfig.recommendedPipelineChunkSize();
+        this.interBatchSleepMillis = rpcProviderConfig.interBatchSleepMillis();
     }
     
     /**
@@ -97,11 +108,16 @@ public class PipelineOrchestrator {
             
             log.info("Processing {} blocks: {} to {}", blocksToProcess, startBlock, endBlock);
             
-            // Checkpoint/Resume: process in fixed 50-block chunks to bound re-scan on crash.
-            final long chunkSize = 50L;
-            for (long chunkStart = startBlock; chunkStart <= endBlock; chunkStart += chunkSize) {
-                final long chunkEnd = Math.min(chunkStart + chunkSize - 1, endBlock);
+            // Checkpoint/Resume: chunk size adapts to RPC provider (public vs professional).
+            for (long chunkStart = startBlock; chunkStart <= endBlock; chunkStart += pipelineChunkSize) {
+                final long chunkEnd = Math.min(chunkStart + pipelineChunkSize - 1, endBlock);
                 long blocksInChunk = chunkEnd - chunkStart + 1;
+
+                if (!isDatabasePoolAlive()) {
+                    log.warn("[DB-PREFLIGHT] Skipping chunk {}–{}; pool unreachable — will retry on next scheduler tick",
+                            chunkStart, chunkEnd);
+                    break;
+                }
                 
                 if (blocksInChunk > PARALLEL_PROCESSING_THRESHOLD) {
                     processBlocksParallel(chunkStart, chunkEnd);
@@ -112,10 +128,10 @@ public class PipelineOrchestrator {
                 // CHECKPOINT: persist progress using ID 1 Protocol after each chunk.
                 checkpointProgress(chunkEnd, endBlock);
                 
-                // Inter-batch Delay: Allow public node rate-limiter to reset
-                if (chunkEnd < endBlock) {
+                // Inter-batch delay: public RPC only (professional endpoints skip sleep).
+                if (chunkEnd < endBlock && interBatchSleepMillis > 0) {
                     try {
-                        Thread.sleep(3000);
+                        Thread.sleep(interBatchSleepMillis);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         log.warn("Pipeline orchestrator interrupted during inter-batch delay");
@@ -244,6 +260,10 @@ public class PipelineOrchestrator {
         try {
             // SOURCE: Fetch block
             EthBlock.Block block = blockSource.fetchBlock(blockNumber);
+            if (block == null) {
+                log.warn("[SOFT-FAIL] Block {} fetch returned null (timeout, interrupt, or shutdown); skipping", blockNumber);
+                return;
+            }
             var transactions = blockSource.getTransactionsFromBlock(block);
             
             log.debug("Processing block {} with {} transactions", blockNumber, transactions.size());
@@ -251,12 +271,11 @@ public class PipelineOrchestrator {
             // BaseBlockSource pushes whale transactions to TransactionPipe.
             // Pipeline processing of those transactions happens asynchronously downstream.
         } catch (Exception e) {
-            if (!(e instanceof InterruptedException)) {
-                log.warn("[RESILIENCE] Block {} failed after retries and was skipped: {}", blockNumber, e.getMessage());
-                // Do not throw an exception. We want to skip this block and continue the pipeline.
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                log.warn("[SOFT-INTERRUPT] Block {} processing interrupted; skipping without crashing pipeline", blockNumber);
             } else {
-                log.warn("Block processing interrupted for block {}: {}", blockNumber, e.getMessage());
-                throw new RuntimeException("Block processing interrupted", e);
+                log.warn("[RESILIENCE] Block {} failed after retries and was skipped: {}", blockNumber, e.getMessage());
             }
         }
     }
@@ -276,26 +295,58 @@ public class PipelineOrchestrator {
             if (updated == 0) {
                 // If the row doesn't exist (unexpected), create it via the existing initializer save,
                 // then retry the deterministic updateProgress call.
-                blockSource.updateLastScannedBlock(lastProcessedBlock);
-                updated = syncStatusRepository.updateProgress(1L, lastProcessedBlock, Instant.now());
+                try {
+                    blockSource.updateLastScannedBlock(lastProcessedBlock);
+                } catch (Exception initEx) {
+                    log.warn("[CHECKPOINT-RESILIENCE] Could not seed sync_status via updateLastScannedBlock at block {}: {}",
+                            lastProcessedBlock, initEx.toString());
+                    return;
+                }
+                try {
+                    updated = syncStatusRepository.updateProgress(1L, lastProcessedBlock, Instant.now());
+                } catch (Exception retryEx) {
+                    log.warn("[CHECKPOINT-RESILIENCE] Retry updateProgress failed at block {}: {}",
+                            lastProcessedBlock, retryEx.toString());
+                    return;
+                }
                 if (updated == 0) {
-                    throw new IllegalStateException("sync_status row id=1 missing; cannot persist checkpoint");
+                    log.warn("[CHECKPOINT-RESILIENCE] sync_status id=1 missing after seed attempt; will retry on next successful chunk (lastProcessedBlock={})",
+                            lastProcessedBlock);
+                    return;
                 }
             }
 
             // Keep in-memory pointer aligned for subsequent scans inside same JVM.
-            blockSource.updateLastScannedBlock(lastProcessedBlock);
+            try {
+                blockSource.updateLastScannedBlock(lastProcessedBlock);
+            } catch (Exception memEx) {
+                log.warn("[CHECKPOINT-RESILIENCE] In-memory / save alignment failed at block {}: {} — checkpoint row may still be updated",
+                        lastProcessedBlock, memEx.toString());
+            }
 
             log.info("[CHECKPOINT] Saved progress: last_scanned_block={} (target_end_block={})",
                     lastProcessedBlock, targetEndBlock);
         } catch (Exception e) {
-            if (!(e instanceof InterruptedException)) {
-                log.error("Failed to checkpoint progress at block {}", lastProcessedBlock, e);
-                throw new RuntimeException("Checkpoint update failed", e);
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                log.warn("[CHECKPOINT-RESILIENCE] Checkpoint interrupted at block {}: {}", lastProcessedBlock, e.toString());
             } else {
-                log.warn("Checkpoint interrupted for block {}: {}", lastProcessedBlock, e.getMessage());
-                throw new RuntimeException("Checkpoint interrupted", e);
+                log.warn("[CHECKPOINT-RESILIENCE] Database unreachable or checkpoint failed at block {} — scanner continues; will sync on next successful chunk: {}",
+                        lastProcessedBlock, e.toString());
             }
+        }
+    }
+
+    /**
+     * Lightweight pool health probe (SELECT 1) before each chunk to avoid poisoning the scan with stale connections.
+     */
+    private boolean isDatabasePoolAlive() {
+        try {
+            Integer one = jdbcTemplate.queryForObject("SELECT 1", Integer.class);
+            return one != null && one == 1;
+        } catch (Exception e) {
+            log.warn("[DB-PREFLIGHT] Connection probe failed: {}", e.toString());
+            return false;
         }
     }
     
