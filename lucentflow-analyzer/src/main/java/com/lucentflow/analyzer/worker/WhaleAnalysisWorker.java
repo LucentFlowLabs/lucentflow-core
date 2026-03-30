@@ -249,18 +249,57 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
             baseFuture = CompletableFuture.completedFuture(whaleTx);
         }
 
-        // Transaction Integrity Audit: attach on-chain execution status (via BaseBlockSource semaphore) and apply risk scoring.
+        // Transaction Integrity Audit: execution status + risk; Genesis Trace 2.0 when risk score > 40.
         return baseFuture
                 .thenCompose(enrichedTx ->
                         blockSource.fetchExecutionStatusAsync(tx.getHash())
-                                .thenApply(status -> {
+                                .thenCompose(status -> {
                                     if (status != null) {
                                         enrichedTx.setExecutionStatus(status);
                                     }
                                     applyRiskScoring(enrichedTx, tx);
                                     applyRevertRiskAdjustment(enrichedTx);
-                                    return enrichedTx;
+                                    return applyGenesisTraceIfHighRisk(enrichedTx, tx);
                                 }));
+    }
+
+    /**
+     * Genesis Trace 2.0: for whales with elevated risk, recursively audit funding origin (SQL, max 3 hops).
+     * Blacklisted funders bump score further; results are on the entity before batch persist.
+     */
+    private CompletableFuture<WhaleTransaction> applyGenesisTraceIfHighRisk(WhaleTransaction whaleTx, Transaction tx) {
+        Integer score = whaleTx.getRiskScore();
+        if (score == null || score <= 40) {
+            return CompletableFuture.completedFuture(whaleTx);
+        }
+        String initiator = tx.getFrom();
+        if (initiator == null || initiator.isBlank()) {
+            return CompletableFuture.completedFuture(whaleTx);
+        }
+        return creatorFundingTracer.traceOriginAsync(initiator).thenApply(opt -> {
+            opt.ifPresent(o -> {
+                whaleTx.setFundingSourceAddress(o.fundingSourceAddress());
+                whaleTx.setFundingSourceTag(o.fundingSourceTag());
+                if (o.blacklisted()) {
+                    int base = whaleTx.getRiskScore() == null ? 0 : whaleTx.getRiskScore();
+                    whaleTx.setRiskScore(base + 35);
+                    appendRiskReason(whaleTx, "Genesis Trace 2.0: Blacklisted funding source");
+                }
+            });
+            return whaleTx;
+        });
+    }
+
+    private void appendRiskReason(WhaleTransaction whaleTx, String reason) {
+        if (whaleTx == null || reason == null || reason.isBlank()) {
+            return;
+        }
+        String existing = whaleTx.getRiskReasons();
+        if (existing == null || existing.isBlank()) {
+            whaleTx.setRiskReasons(reason);
+        } else if (!existing.contains(reason)) {
+            whaleTx.setRiskReasons(existing + " | " + reason);
+        }
     }
 
     /**

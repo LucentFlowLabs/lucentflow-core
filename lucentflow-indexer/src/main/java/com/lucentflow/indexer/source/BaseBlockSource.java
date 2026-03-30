@@ -17,6 +17,7 @@ import java.math.BigInteger;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.springframework.context.event.EventListener;
@@ -55,6 +56,9 @@ public class BaseBlockSource {
     
     // Whale threshold constant for efficiency
     private static final BigInteger WHALE_THRESHOLD = com.lucentflow.common.utils.EthUnitConverter.etherStringToWei("10");
+
+    /** Align receipt RPC hard timeout with block fetch for consistent public-RPC behavior. */
+    private static final int RPC_RECEIPT_TIMEOUT_SECONDS = 60;
     
     // Retry configuration for RPC calls
     private final Retry retryConfig;
@@ -287,7 +291,7 @@ public class BaseBlockSource {
                 rpcSemaphore.acquire();
                 try {
                     CompletableFuture<EthGetTransactionReceipt> future = web3j.ethGetTransactionReceipt(txHash).sendAsync();
-                    EthGetTransactionReceipt response = future.orTimeout(10, TimeUnit.SECONDS).join();
+                    EthGetTransactionReceipt response = future.orTimeout(RPC_RECEIPT_TIMEOUT_SECONDS, TimeUnit.SECONDS).join();
                     if (response == null || response.getTransactionReceipt().isEmpty()) {
                         return null;
                     }
@@ -302,6 +306,32 @@ public class BaseBlockSource {
             }
         }, rpcExecutor);
     }
+
+    /**
+     * Runs a blocking RPC call under the shared fair {@code rpcSemaphore}.
+     * Use for any Web3j traffic that must participate in unified backpressure with
+     * block and receipt fetches (prevents permit leaks via {@code finally} release).
+     *
+     * @param action RPC work to execute while holding a permit
+     * @param <T>    result type
+     * @return action result
+     */
+    public <T> T runWithRpcPermit(Callable<T> action) {
+        try {
+            log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcSemaphore.getQueueLength());
+            rpcSemaphore.acquire();
+            try {
+                return action.call();
+            } finally {
+                rpcSemaphore.release();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while waiting for RPC permit", e);
+        } catch (Exception e) {
+            throw new RuntimeException("RPC call failed under permit", e);
+        }
+    }
     
     /**
      * Get transactions from a block and push whale transactions to TransactionPipe.
@@ -314,7 +344,7 @@ public class BaseBlockSource {
                 .map(txResult -> (Transaction) txResult.get())
                 .toList();
         
-        // Push whale transactions to TransactionPipe for zero-loss processing
+        // Push whale-sized transfers and contract deployments to TransactionPipe (downstream applies finer rules)
         for (Transaction tx : transactions) {
             if (isWhaleTransaction(tx)) {
                 try {
@@ -334,13 +364,22 @@ public class BaseBlockSource {
     }
     
     /**
-     * Check if a transaction is a whale transaction (>10 ETH).
-     * Uses pre-computed WHALE_THRESHOLD constant for efficiency.
+     * Indexer ingress filter: pass high-value transfers or contract creations to the pipe.
+     * Contract deployments typically have value 0; they must not be dropped here or rug analysis starves.
+     *
      * @param tx Transaction to check
-     * @return true if value > 10 ETH, false otherwise
+     * @return true if value &gt; 10 ETH or contract creation ({@code to} absent)
      */
     private boolean isWhaleTransaction(Transaction tx) {
-        if (tx == null || tx.getValue() == null) {
+        if (tx == null) {
+            return false;
+        }
+        String to = tx.getTo();
+        boolean isContractCreation = to == null || to.trim().isEmpty();
+        if (isContractCreation) {
+            return true;
+        }
+        if (tx.getValue() == null) {
             return false;
         }
         return tx.getValue().compareTo(WHALE_THRESHOLD) > 0;

@@ -17,7 +17,10 @@ import java.util.List;
  * High-throughput PostgreSQL batch sink for whale transaction persistence.
  * 
  * <p>Implementation Details:
- * Uses Native SQL UPSERT with JdbcTemplate for robust duplicate handling without exception poisoning.
+ * Uses PostgreSQL {@code INSERT ... ON CONFLICT (hash) DO UPDATE} for atomic enrichment: new inserts
+ * write the full row; hash collisions refresh the intelligence layer (risk, funding, execution_status)
+ * while preserving {@code id}, {@code hash}, and {@code created_at}. {@code EXCLUDED.*} propagates
+ * NULLs explicitly where the batch supplies null.
  * Optimized for PostgreSQL reWriteBatchedInserts=true with true batch operations.
  * Virtual thread compatible through stateless operations and simplified concurrency.
  * </p>
@@ -54,13 +57,20 @@ public class WhaleDatabaseSink {
 
         String sql = """
             INSERT INTO whale_transactions (
-                hash, from_address, to_address, value_eth, block_number, 
-                timestamp, is_contract_creation, gas_price, gas_limit, gas_cost_eth, 
-                transaction_type, from_address_tag, to_address_tag, whale_category, 
-                address_tag, transaction_category, funding_source_address, funding_source_tag, 
-                rug_risk_level, risk_score, risk_reasons, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (hash) DO NOTHING
+                hash, from_address, to_address, value_eth, block_number,
+                timestamp, is_contract_creation, gas_price, gas_limit, gas_cost_eth,
+                transaction_type, from_address_tag, to_address_tag, whale_category,
+                address_tag, transaction_category, funding_source_address, funding_source_tag,
+                rug_risk_level, risk_score, risk_reasons, execution_status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (hash) DO UPDATE SET
+                risk_score = EXCLUDED.risk_score,
+                risk_reasons = EXCLUDED.risk_reasons,
+                rug_risk_level = EXCLUDED.rug_risk_level,
+                funding_source_address = EXCLUDED.funding_source_address,
+                funding_source_tag = EXCLUDED.funding_source_tag,
+                execution_status = EXCLUDED.execution_status,
+                updated_at = CURRENT_TIMESTAMP
             """;
 
         try {
@@ -101,10 +111,16 @@ public class WhaleDatabaseSink {
                         ps.setNull(20, java.sql.Types.INTEGER);
                     }
                     ps.setString(21, tx.getRiskReasons());
-                    
+
+                    if (tx.getExecutionStatus() != null) {
+                        ps.setString(22, tx.getExecutionStatus());
+                    } else {
+                        ps.setNull(22, java.sql.Types.VARCHAR);
+                    }
+
                     java.time.Instant now = java.time.Instant.now();
-                    ps.setTimestamp(22, Timestamp.from(tx.getCreatedAt() != null ? tx.getCreatedAt() : now));
-                    ps.setTimestamp(23, Timestamp.from(tx.getUpdatedAt() != null ? tx.getUpdatedAt() : now));
+                    ps.setTimestamp(23, Timestamp.from(tx.getCreatedAt() != null ? tx.getCreatedAt() : now));
+                    ps.setTimestamp(24, Timestamp.from(tx.getUpdatedAt() != null ? tx.getUpdatedAt() : now));
                 }
 
                 @Override
@@ -112,7 +128,8 @@ public class WhaleDatabaseSink {
                     return transactions.size();
                 }
             });
-            log.info("[SINK] Successfully processed batch of {} transactions via UPSERT.", transactions.size());
+            log.info("[SINK] Upserted batch of {} transactions. Intelligence updated for existing records.",
+                    transactions.size());
         } catch (Exception e) {
             log.error("[SINK] Native batch UPSERT failed.", e);
         }
