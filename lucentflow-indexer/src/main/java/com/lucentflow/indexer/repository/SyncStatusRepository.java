@@ -57,4 +57,24 @@ public interface SyncStatusRepository extends JpaRepository<SyncStatus, Long> {
     int updateProgress(@Param("id") Long id,
                        @Param("blockNumber") Long blockNumber,
                        @Param("updatedAt") Instant updatedAt);
+
+    /**
+     * Atomic UPSERT for ID=1 protocol checkpoint.
+     * <p>
+     * Used to avoid optimistic locking/version mismatch when the DB is empty
+     * (e.g., after TRUNCATE) and multiple virtual threads start concurrently.
+     * </p>
+     *
+     * @param id  sync_status primary key (must be 1L for ID=1 protocol)
+     * @param block last scanned block number
+     */
+    @Modifying
+    @Transactional
+    @Query(
+            value = "INSERT INTO sync_status (id, last_scanned_block, sync_status, created_at, updated_at) " +
+                    "VALUES (:id, :block, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) " +
+                    "ON CONFLICT (id) DO UPDATE SET last_scanned_block = EXCLUDED.last_scanned_block, updated_at = CURRENT_TIMESTAMP",
+            nativeQuery = true
+    )
+    void upsertProgress(@Param("id") Long id, @Param("block") Long block);
 }

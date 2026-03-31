@@ -106,9 +106,11 @@ public class PipelineOrchestrator {
             long endBlock = blockRange[1];
             long blocksToProcess = endBlock - startBlock + 1;
             
-            log.info("Processing {} blocks: {} to {}", blocksToProcess, startBlock, endBlock);
+            log.debug("Processing {} blocks: {} to {}", blocksToProcess, startBlock, endBlock);
             
             // Checkpoint/Resume: chunk size adapts to RPC provider (public vs professional).
+            java.util.List<java.util.concurrent.CompletableFuture<Void>> checkpointFutures =
+                    new java.util.ArrayList<>();
             for (long chunkStart = startBlock; chunkStart <= endBlock; chunkStart += pipelineChunkSize) {
                 final long chunkEnd = Math.min(chunkStart + pipelineChunkSize - 1, endBlock);
                 long blocksInChunk = chunkEnd - chunkStart + 1;
@@ -126,9 +128,16 @@ public class PipelineOrchestrator {
                 }
                 
                 // CHECKPOINT: persist progress using ID 1 Protocol after each chunk.
-                checkpointProgress(chunkEnd, endBlock);
+                // Async checkpoint reduces idle time between chunks; losing a checkpoint only
+                // causes reprocessing (idempotent upsert), not data loss.
+                checkpointFutures.add(
+                        java.util.concurrent.CompletableFuture.runAsync(
+                                () -> checkpointProgress(chunkEnd, endBlock),
+                                pipelineExecutor
+                        )
+                );
                 
-                // Inter-batch delay: public RPC only (professional endpoints skip sleep).
+                // Inter-batch delay: provider tier dependent (used to prevent anti-spam/bursts).
                 if (chunkEnd < endBlock && interBatchSleepMillis > 0) {
                     try {
                         Thread.sleep(interBatchSleepMillis);
@@ -140,7 +149,9 @@ public class PipelineOrchestrator {
                 }
             }
             
-            log.info("Completed processing up to block {}", endBlock);
+            // Ensure all in-flight checkpoint updates are completed before releasing the scheduler lock.
+            checkpointFutures.forEach(java.util.concurrent.CompletableFuture::join);
+            log.debug("Completed processing up to block {}", endBlock);
             
         } catch (Exception e) {
             // Filter shutdown noise - don't log full stack trace during graceful shutdown
@@ -170,7 +181,7 @@ public class PipelineOrchestrator {
                 processBlock(blockNum);
             } catch (Exception e) {
                 if (!(e instanceof InterruptedException)) {
-                    log.error("Error processing block {} sequentially", blockNum, e);
+                    log.warn("Failed to process block {} sequentially (transient)", blockNum, e.getMessage());
                 }
             }
         }
@@ -188,7 +199,7 @@ public class PipelineOrchestrator {
      * @throws InterruptedException if thread interruption occurs during processing
      */
     private void processBlocksParallel(long startBlock, long endBlock) {
-        log.info("Processing {} blocks in parallel: {} to {}", 
+        log.debug("Processing {} blocks in parallel: {} to {}", 
                    endBlock - startBlock + 1, startBlock, endBlock);
         
         @SuppressWarnings("unchecked")
@@ -233,7 +244,7 @@ public class PipelineOrchestrator {
                         processBlock(currentBlock);
                     } catch (Exception e) {
                         if (!(e instanceof InterruptedException)) {
-                            log.error("Error processing block {} in parallel", currentBlock, e);
+                            log.warn("Failed to process block {} in parallel (transient)", currentBlock, e.getMessage());
                         }
                     }
                 }, pipelineExecutor);
@@ -324,8 +335,12 @@ public class PipelineOrchestrator {
                         lastProcessedBlock, memEx.toString());
             }
 
-            log.info("[CHECKPOINT] Saved progress: last_scanned_block={} (target_end_block={})",
-                    lastProcessedBlock, targetEndBlock);
+            // Reduce INFO noise: only show periodic sync progress.
+            boolean shouldLogSync = (lastProcessedBlock % 1000L == 0) || lastProcessedBlock == targetEndBlock;
+            if (shouldLogSync) {
+                log.info("[SYNC] last_scanned_block={} (target_end_block={})",
+                        lastProcessedBlock, targetEndBlock);
+            }
         } catch (Exception e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();

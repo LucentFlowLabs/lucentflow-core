@@ -48,8 +48,8 @@ lucentflow:
     # Default Base public RPC; set LUCENTFLOW_CHAIN_RPC_URL for Alchemy / QuickNode / Infura / BlastAPI (professional tier)
     rpc-url: ${LUCENTFLOW_CHAIN_RPC_URL:https://mainnet.base.org}
   basescan:
-    api-key: ${BASESCAN_API_KEY}
-    base-url: ${BASESCAN_BASE_URL:https://api.basescan.org/api}
+    api-key: ${BASESCAN_API_KEY:}
+    base-url: ${BASESCAN_BASE_URL:https://api-v2.basescan.org/api}
   indexer:
     start-block: ${LUCENTFLOW_INDEXER_START_BLOCK:}
 

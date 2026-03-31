@@ -172,9 +172,10 @@ public class Web3jAutoConfiguration {
     @Bean
     public RpcProviderConfig rpcProviderConfig(Web3jProperties properties) {
         RpcProviderType type = RpcProviderType.fromRpcUrl(properties.getRpcUrl());
-        // Alchemy / QuickNode / Infura / BlastAPI: 20 fair RPC permits + 200-block checkpoint chunks (no inter-batch sleep).
+        // Alchemy / QuickNode / Infura / BlastAPI: conservative free-tier throttling.
         return switch (type) {
-            case PROFESSIONAL -> new RpcProviderConfig(type, 20, 200, 0L);
+            // Professional endpoints: prioritize continuity over burst throughput.
+            case PROFESSIONAL -> new RpcProviderConfig(type, 10, 50, 1500L);
             case PUBLIC -> new RpcProviderConfig(type, 2, 50, 3000L);
         };
     }

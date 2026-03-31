@@ -15,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 import org.web3j.protocol.core.methods.response.Transaction;
+import org.web3j.exceptions.MessageDecodingException;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -22,8 +23,10 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -54,8 +57,15 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private final AtomicLong errorCount = new AtomicLong(0);
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
 
+    private final AtomicLong catchUpCheckAtMs = new AtomicLong(0);
+    private volatile boolean catchUpMode = false;
+
     // T10 Standard: Class-level ExecutorService for nuclear shutdown
     private ExecutorService executor;
+
+    // Async sink backpressure: allow a small number of in-flight batch writes.
+    // Non-final to avoid being pulled into Lombok-generated constructor params.
+    private Semaphore dbSaveSemaphore = new Semaphore(2);
 
     private static final int BATCH_SIZE = 50;
     private static final int CONCURRENCY = 3; // Number of parallel virtual thread workers
@@ -115,14 +125,31 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
 
                     if (!whaleBatch.isEmpty()) {
                         // Massive performance gain: SQL Batch Insert
-                        whaleDatabaseSink.saveWhaleTransactions(whaleBatch);
-                        whaleCount.addAndGet(whaleBatch.size());
+                        int batchSize = whaleBatch.size();
+                        whaleCount.addAndGet(batchSize);
+                        try {
+                            // Don't let DB writes stall transaction draining indefinitely.
+                            dbSaveSemaphore.acquire();
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                        CompletableFuture.runAsync(() -> {
+                            try {
+                                whaleDatabaseSink.saveWhaleTransactions(whaleBatch);
+                            } finally {
+                                dbSaveSemaphore.release();
+                            }
+                        }, executor).exceptionally(e -> {
+                            log.error("[SINK-ASYNC] saveWhaleTransactions failed: {}", e.getMessage());
+                            return null;
+                        });
                     }
 
                     processedCount.addAndGet(rawBatch.size());
                     
-                    if (processedCount.get() % 1000 < BATCH_SIZE) {
-                        log.info("[STATUS] Analyzer throughput: {} processed, {} whales detected.", 
+                    if (processedCount.get() % 1000 == 0) {
+                        log.debug("[STATUS] Analyzer throughput: {} processed, {} whales detected.",
                                 processedCount.get(), whaleCount.get());
                     }
 
@@ -176,7 +203,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         
         // 1. Always Capture Contract Creations (0 ETH threshold)
         if (tx.getTo() == null || tx.getTo().trim().isEmpty()) {
-            log.info("[FILTER-PASS] High-value/Creation detected: 0 ETH");
+            log.debug("[FILTER-PASS] High-value/Creation detected: 0 ETH");
             return true;
         }
 
@@ -191,13 +218,13 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         if (isContractCall) {
             // Special Exception: Renounce Ownership signature (0x715018a6) -> 0 ETH Threshold
             if (tx.getInput().contains("715018a6")) {
-                log.info("[FILTER-PASS] {} ETH captured", valueInEth);
+                log.debug("[FILTER-PASS] {} ETH captured", valueInEth);
                 return true;
             }
             
             // 2. Contract Calls -> 5.0 ETH Threshold
             if (valueInEth.compareTo(new BigDecimal("5.0")) >= 0) {
-                log.info("[FILTER-PASS] {} ETH captured", valueInEth);
+                log.debug("[FILTER-PASS] {} ETH captured", valueInEth);
                 return true;
             } else {
                 log.debug("[FILTER-DROP] Value {} is below threshold for CONTRACT_CALL", valueInEth);
@@ -207,7 +234,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         
         // 3. Regular ETH Transfers -> 10.0 ETH Threshold (Hard limit)
         if (valueInEth.compareTo(new BigDecimal("10.0")) >= 0) {
-            log.info("[FILTER-PASS] {} ETH captured", valueInEth);
+            log.debug("[FILTER-PASS] {} ETH captured", valueInEth);
             return true;
         } else {
             log.debug("[FILTER-DROP] Value {} is below threshold for ETH_TRANSFER", valueInEth);
@@ -216,6 +243,26 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     }
 
     private CompletableFuture<WhaleTransaction> enrichAsync(WhaleTransaction whaleTx, Transaction tx) {
+        return enrichAsyncCore(whaleTx, tx).exceptionallyCompose(ex -> {
+            if (!isMessageDecodingGlitch(ex)) {
+                return CompletableFuture.failedFuture(ex);
+            }
+            log.debug("[NODE-GLITCH] RPC decode glitch for tx {}, applying silent retry: {}", tx.getHash(), ex.toString());
+            coolDownAfterNodeGlitch(3000L);
+            return enrichAsyncCore(whaleTx, tx).exceptionally(retryEx -> {
+                if (isMessageDecodingGlitch(retryEx)) {
+                    log.debug("[NODE-GLITCH] Silent retry still failed for tx {}: {}", tx.getHash(), retryEx.toString());
+                    return whaleTx;
+                }
+                throw new CompletionException(retryEx);
+            });
+        });
+    }
+
+    /**
+     * Enrichment + receipt fetch + risk; failures are surfaced to {@link #enrichAsync} for decode handling.
+     */
+    private CompletableFuture<WhaleTransaction> enrichAsyncCore(WhaleTransaction whaleTx, Transaction tx) {
         String fromLabel = addressLabeler.getAddressLabel(tx.getFrom());
         String toLabel = addressLabeler.getAddressLabel(tx.getTo());
         BigDecimal value = whaleTx.getValueEth();
@@ -229,7 +276,11 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         CompletableFuture<WhaleTransaction> baseFuture;
         // Anti-Rug Trace: Enrich contract creations with funding analysis
         if (whaleTx.getIsContractCreation()) {
-            baseFuture = creatorFundingTracer.enrichRugMetrics(whaleTx)
+            if (shouldSkipTracingInCatchUp(whaleTx.getValueEth())) {
+                baseFuture = CompletableFuture.completedFuture(whaleTx);
+            } else {
+                baseFuture = creatorFundingTracer.enrichRugMetrics(whaleTx)
+                    .orTimeout(120, TimeUnit.SECONDS)
                     .thenApply(enriched -> {
                         if (enriched != null) {
                             whaleTx.setFundingSourceAddress(enriched.getFundingSourceAddress());
@@ -249,22 +300,84 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                         // Continue processing without rug analysis to prevent pipeline disruption
                         return whaleTx;
                     });
+            }
         } else {
             baseFuture = CompletableFuture.completedFuture(whaleTx);
         }
 
         // Transaction Integrity Audit: execution status + risk; Genesis Trace 2.0 when risk score > 40.
-        return baseFuture
-                .thenCompose(enrichedTx ->
-                        blockSource.fetchExecutionStatusAsync(tx.getHash())
-                                .thenCompose(status -> {
-                                    if (status != null) {
-                                        enrichedTx.setExecutionStatus(status);
-                                    }
-                                    applyRiskScoring(enrichedTx, tx);
-                                    applyRevertRiskAdjustment(enrichedTx);
-                                    return applyGenesisTraceIfHighRisk(enrichedTx, tx);
-                                }));
+        return baseFuture.thenCompose(enrichedTx -> {
+            // Performance budget: avoid receipt fetching for low-value contract calls.
+            // Receipt calls are expensive (CU) and we only need them when:
+            // - valueEth > 5.0, or
+            // - contract creation (to preserve integrity signal for factories).
+            boolean shouldFetchReceipt = Boolean.TRUE.equals(whaleTx.getIsContractCreation())
+                    || (value != null && value.compareTo(new BigDecimal("5.0")) > 0);
+
+            if (!shouldFetchReceipt) {
+                applyRiskScoring(enrichedTx, tx);
+                applyRevertRiskAdjustment(enrichedTx);
+                return applyGenesisTraceIfHighRisk(enrichedTx, tx);
+            }
+
+            return blockSource.fetchExecutionStatusAsync(tx.getHash())
+                    .thenCompose(status -> {
+                        if (status != null) {
+                            enrichedTx.setExecutionStatus(status);
+                        }
+                        applyRiskScoring(enrichedTx, tx);
+                        applyRevertRiskAdjustment(enrichedTx);
+                        return applyGenesisTraceIfHighRisk(enrichedTx, tx);
+                    });
+        });
+    }
+
+    private boolean shouldSkipTracingInCatchUp(BigDecimal valueEth) {
+        if (valueEth == null) {
+            return false;
+        }
+        if (valueEth.compareTo(new BigDecimal("20")) >= 0) {
+            return false;
+        }
+        return isCatchUpMode();
+    }
+
+    private boolean isCatchUpMode() {
+        long now = System.currentTimeMillis();
+        long last = catchUpCheckAtMs.get();
+        if (now - last < 5_000L) {
+            return catchUpMode;
+        }
+        if (!catchUpCheckAtMs.compareAndSet(last, now)) {
+            return catchUpMode;
+        }
+        try {
+            long lastScanned = blockSource.getLastScannedBlock();
+            long head = blockSource.getLatestBlockNumber();
+            catchUpMode = (head - lastScanned) > 5_000L;
+            return catchUpMode;
+        } catch (Exception e) {
+            // Fail-open: don't skip tracing if we can't safely determine catch-up state.
+            catchUpMode = false;
+            return false;
+        }
+    }
+
+    private static boolean isMessageDecodingGlitch(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof MessageDecodingException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void coolDownAfterNodeGlitch(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**

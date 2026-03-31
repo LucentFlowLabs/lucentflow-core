@@ -15,7 +15,6 @@ import org.web3j.protocol.core.methods.response.EthGetTransactionReceipt;
 import org.web3j.protocol.core.methods.response.Transaction;
 
 import java.math.BigInteger;
-import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
@@ -57,8 +56,8 @@ public class BaseBlockSource {
     // Whale threshold constant for efficiency
     private static final BigInteger WHALE_THRESHOLD = com.lucentflow.common.utils.EthUnitConverter.etherStringToWei("10");
 
-    /** Align receipt RPC hard timeout with block fetch for consistent public-RPC behavior. */
-    private static final int RPC_RECEIPT_TIMEOUT_SECONDS = 60;
+    private final int rpcBlockTimeoutSeconds;
+    private final int rpcReceiptTimeoutSeconds;
     
     // Retry configuration for RPC calls
     private final Retry retryConfig;
@@ -74,31 +73,60 @@ public class BaseBlockSource {
         this.transactionPipe = transactionPipe;
         int permits = rpcProviderConfig.recommendedRpcSemaphorePermits();
         this.rpcSemaphore = new Semaphore(permits, true);
+        // Timeout calibration: professional endpoints should fail fast and retry.
+        int timeoutSeconds = switch (rpcProviderConfig.providerType()) {
+            case PROFESSIONAL -> 10;
+            case PUBLIC -> 60;
+        };
+        this.rpcBlockTimeoutSeconds = timeoutSeconds;
+        this.rpcReceiptTimeoutSeconds = timeoutSeconds;
         String optimizationMode = switch (rpcProviderConfig.providerType()) {
             case PROFESSIONAL -> "high-throughput concurrent RPC (%d permits)".formatted(permits);
             case PUBLIC -> "conservative public-RPC throttling (%d permits)".formatted(permits);
         };
         log.info("[RPC-DETECTION] Detected {} endpoint. Optimized for {}.",
                 rpcProviderConfig.providerType(), optimizationMode);
+        if (rpcProviderConfig.providerType() == com.lucentflow.sdk.config.RpcProviderType.PROFESSIONAL) {
+            // Diagnostic for tuning: used to detect whether 429 bursts return.
+            log.info("[PERF-STEALTH] Running in high-stability mode. {} permits, {} chunk size.",
+                    permits, rpcProviderConfig.recommendedPipelineChunkSize());
+        }
         // Trigger Flyway initialization if present (bean side-effects / migrations).
         flywayProvider.getIfAvailable();
         
-        // Configure retry with exponential backoff
+        // Configure retry with exponential backoff + jitter.
+        // 429 gets an extra 10s sleep before retry starts to wait out rate-limit reset.
+        // Note: do not combine waitDuration() with intervalFunction() — Resilience4j treats both as interval config and throws IllegalStateException.
         this.retryConfig = Retry.of("web3jRetry", RetryConfig.custom()
             .maxAttempts(5)
-            .waitDuration(Duration.ofSeconds(1))
             .retryExceptions(
                 org.web3j.protocol.exceptions.ClientConnectionException.class,
                 java.net.SocketTimeoutException.class,
                 java.net.ConnectException.class
             )
+            .intervalFunction(
+                // Exponential backoff with randomization (jitter) to avoid synchronized retries.
+                io.github.resilience4j.core.IntervalFunction.ofExponentialRandomBackoff(5_000L, 2.0, 0.2, 60_000L)
+            )
             .retryOnException(ex -> {
-                // Retry on 429 Too Many Requests and other connection issues
                 String message = ex.getMessage();
-                return message != null && 
-                       (message.contains("429") || 
-                        message.contains("Too Many Requests") ||
-                        message.contains("rate limit"));
+                boolean is429 = message != null && message.toLowerCase().contains("429");
+                boolean isRateLimit = message != null && (
+                        message.toLowerCase().contains("too many requests") ||
+                        message.toLowerCase().contains("rate limit")
+                );
+
+                // If it's a rate-limit hit, sleep extra before retry starts.
+                if (is429 || isRateLimit) {
+                    try {
+                        Thread.sleep(10_000L);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                }
+                // retryExceptions already restrict which exception types are eligible.
+                return true;
             })
             .build());
     }
@@ -109,27 +137,31 @@ public class BaseBlockSource {
 
     // Shared across scheduler executions; ensure visibility across threads.
     private volatile Long lastScannedBlock;
+
+    private final Object lastScannedBlockInitLock = new Object();
     
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
-        log.info("System signaled READY. Initializing block height from database...");
-        initializeLastScannedBlock();
+        // Warm-up: trigger thread-safe lazy initialization.
+        getLastScannedBlock();
     }
     
     public void initializeLastScannedBlock() {
-        try {
-            long startBlockToProcess = resolveStartBlock();
-            long resolvedLastScanned = Math.max(0L, startBlockToProcess - 1);
+        synchronized (lastScannedBlockInitLock) {
+            try {
+                long startBlockToProcess = resolveStartBlock();
+                long resolvedLastScanned = Math.max(0L, startBlockToProcess - 1);
 
-            this.lastScannedBlock = resolvedLastScanned;
-            updateLastScannedBlock(resolvedLastScanned);
+                this.lastScannedBlock = resolvedLastScanned;
+                updateLastScannedBlock(resolvedLastScanned);
 
-            log.info("Resolved start block: startBlockToProcess={} => last_scanned_block={}",
-                    startBlockToProcess, resolvedLastScanned);
-        } catch (Exception e) {
-            log.error("Failed to initialize last scanned block - database or RPC may not be ready yet", e);
-            // Don't throw exception - let the application start and retry later
-            lastScannedBlock = 0L; // Default fallback
+                log.info("Resolved start block: startBlockToProcess={} => last_scanned_block={}",
+                        startBlockToProcess, resolvedLastScanned);
+            } catch (Exception e) {
+                log.error("Failed to initialize last scanned block - database or RPC may not be ready yet", e);
+                // Don't throw exception - let the application start and retry later
+                lastScannedBlock = 0L; // Default fallback
+            }
         }
     }
 
@@ -201,7 +233,19 @@ public class BaseBlockSource {
      * @return Last scanned block number
      */
     public long getLastScannedBlock() {
-        return lastScannedBlock;
+        Long v = lastScannedBlock;
+        if (v != null) {
+            return v;
+        }
+        // Double-checked locking: avoid WARN/temporary null access during startup.
+        synchronized (lastScannedBlockInitLock) {
+            v = lastScannedBlock;
+            if (v == null) {
+                initializeLastScannedBlock();
+                v = lastScannedBlock;
+            }
+        }
+        return v != null ? v : 0L;
     }
     
     /**
@@ -210,18 +254,7 @@ public class BaseBlockSource {
      */
     public void updateLastScannedBlock(long blockNumber) {
         this.lastScannedBlock = blockNumber;
-        
-        // Persist to database (ensure ID 1 is used to prevent multiple rows)
-        try {
-            SyncStatus status = syncStatusRepository.findById(1L).orElse(new SyncStatus());
-            if (status.getId() == null) {
-                status.setId(1L);
-            }
-            status.setLastScannedBlock(blockNumber);
-            syncStatusRepository.save(status);
-        } catch (Exception e) {
-            log.error("Failed to update sync status for block {}", blockNumber, e);
-        }
+        syncStatusRepository.upsertProgress(1L, blockNumber);
     }
     
     /**
@@ -249,8 +282,8 @@ public class BaseBlockSource {
                         }
                     }, rpcExecutor);
                     
-                    // Apply hard timeout of 60 seconds for stability on public RPC
-                    EthBlock block = future.orTimeout(60, TimeUnit.SECONDS).get();
+                    // Apply hard timeout based on provider tier
+                    EthBlock block = future.orTimeout(rpcBlockTimeoutSeconds, TimeUnit.SECONDS).get();
                     if (block == null || block.getBlock() == null) {
                         throw new RuntimeException("Empty block returned from RPC");
                     }
@@ -304,7 +337,7 @@ public class BaseBlockSource {
                 rpcSemaphore.acquire();
                 try {
                     CompletableFuture<EthGetTransactionReceipt> future = web3j.ethGetTransactionReceipt(txHash).sendAsync();
-                    EthGetTransactionReceipt response = future.orTimeout(RPC_RECEIPT_TIMEOUT_SECONDS, TimeUnit.SECONDS).join();
+                    EthGetTransactionReceipt response = future.orTimeout(rpcReceiptTimeoutSeconds, TimeUnit.SECONDS).join();
                     if (response == null || response.getTransactionReceipt().isEmpty()) {
                         return null;
                     }
@@ -403,19 +436,12 @@ public class BaseBlockSource {
      * @return true if there are new blocks, false otherwise
      */
     public boolean hasNewBlocks() {
-        if (lastScannedBlock == null) {
-            log.warn("lastScannedBlock is null during hasNewBlocks check. Re-initializing...");
-            initializeLastScannedBlock();
-            // If it's still null after initialization attempt, fail safely
-            if (lastScannedBlock == null) {
-                return false;
-            }
-        }
+        long last = getLastScannedBlock();
         long latestBlock = getLatestBlockNumber();
-        if (latestBlock <= lastScannedBlock) {
+        if (latestBlock <= last) {
             log.debug("No new blocks to process");
         }
-        return latestBlock > lastScannedBlock;
+        return latestBlock > last;
     }
     
     /**
@@ -424,10 +450,11 @@ public class BaseBlockSource {
      */
     public long[] getBlockRangeToProcess() {
         long latestBlock = getLatestBlockNumber();
-        if (latestBlock <= lastScannedBlock) {
+        long last = getLastScannedBlock();
+        if (latestBlock <= last) {
             return new long[0];
         }
         
-        return new long[]{lastScannedBlock + 1, latestBlock};
+        return new long[]{last + 1, latestBlock};
     }
 }
