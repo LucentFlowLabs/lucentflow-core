@@ -32,9 +32,11 @@ public class RiskEngine {
      * @param whaleTx The enriched whale transaction containing pre-computed risk levels
      * @param tx The raw Web3j transaction containing execution parameters (gas, input data)
      * @param recentDeploymentCount contract creations from the same {@code from} in the lookback window (e.g. 10 minutes)
+     * @param identicalBytecodeCount prior rows in DB with the same creation bytecode hash in the lookback window (e.g. 7 days)
      * @return A {@link RiskAssessment} containing the final bounded score and descriptive reasons
      */
-    public RiskAssessment calculateRisk(WhaleTransaction whaleTx, Transaction tx, int recentDeploymentCount) {
+    public RiskAssessment calculateRisk(WhaleTransaction whaleTx, Transaction tx, int recentDeploymentCount,
+                                        int identicalBytecodeCount) {
         int score = 0;
         StringBuilder reasons = new StringBuilder();
 
@@ -96,6 +98,14 @@ public class RiskEngine {
             reasons.append("Serial Deployment Pattern Detected (")
                     .append(recentDeploymentCount)
                     .append(" deployments in 10m); ");
+        }
+
+        // 6. Identical creation bytecode (clone / scam factory reuse)
+        if (identicalBytecodeCount > 0) {
+            score += 20;
+            reasons.append("Identical Bytecode Detected (Clone of ")
+                    .append(identicalBytecodeCount)
+                    .append(" previous deployments); ");
         }
 
         // Bound final score to maximum of 100

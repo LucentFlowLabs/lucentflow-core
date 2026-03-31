@@ -3,6 +3,7 @@ package com.lucentflow.analyzer.worker;
 import com.lucentflow.common.constant.BaseChainConstants;
 import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.common.utils.EthUnitConverter;
+import com.lucentflow.common.utils.Sha256HexDigest;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.analyzer.service.AddressLabeler;
 import com.lucentflow.indexer.repository.WhaleTransactionRepository;
@@ -180,6 +181,12 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                     .isContractCreation(tx.getTo() == null || tx.getTo().trim().isEmpty())
                     .timestamp(java.time.Instant.now())
                     .build();
+
+            if (Boolean.TRUE.equals(whaleTx.getIsContractCreation())) {
+                String creationInput = tx.getInput();
+                String fingerprint = Sha256HexDigest.hashUtf8(creationInput);
+                whaleTx.setBytecodeHash(fingerprint);
+            }
 
             return enrichAsync(whaleTx, tx).exceptionally(e -> {
                 log.warn("Failed to process tx {}: {}", tx.getHash(), e.getMessage());
@@ -427,9 +434,27 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
      */
     private void applyRiskScoring(WhaleTransaction whaleTx, Transaction tx) {
         int recentDeploymentCount = countRecentDeploymentsForInitiator(tx.getFrom());
-        var riskAssessment = riskEngine.calculateRisk(whaleTx, tx, recentDeploymentCount);
+        int identicalBytecodeCount = countIdenticalBytecodeDeployments(whaleTx.getBytecodeHash());
+        var riskAssessment = riskEngine.calculateRisk(whaleTx, tx, recentDeploymentCount, identicalBytecodeCount);
         whaleTx.setRiskScore(riskAssessment.score());
         whaleTx.setRiskReasons(riskAssessment.reasons());
+    }
+
+    /**
+     * Prior persisted rows with the same creation bytecode hash in the last 7 days (clone detector).
+     */
+    private int countIdenticalBytecodeDeployments(String bytecodeHash) {
+        if (bytecodeHash == null || bytecodeHash.isBlank()) {
+            return 0;
+        }
+        try {
+            Instant since = Instant.now().minus(7, ChronoUnit.DAYS);
+            long n = whaleTransactionRepository.countByBytecodeHashSince(bytecodeHash, since);
+            return n > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) n;
+        } catch (Exception e) {
+            log.debug("[BYTECODE-FP] countByBytecodeHashSince failed for {}: {}", bytecodeHash, e.getMessage());
+            return 0;
+        }
     }
 
     /**

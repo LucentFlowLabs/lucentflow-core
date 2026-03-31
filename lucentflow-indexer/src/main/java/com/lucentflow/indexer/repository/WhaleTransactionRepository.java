@@ -47,6 +47,13 @@ public interface WhaleTransactionRepository extends JpaRepository<WhaleTransacti
      */
     @Query("SELECT COUNT(w) FROM WhaleTransaction w WHERE w.fromAddress = :fromAddress AND w.isContractCreation = true AND w.timestamp > :since")
     long countRecentDeployments(@Param("fromAddress") String fromAddress, @Param("since") Instant since);
+
+    /**
+     * Prior contract-creation rows with the same bytecode fingerprint within the lookback window.
+     * Current tx is usually not persisted yet, so this counts previous deployments only.
+     */
+    @Query("SELECT COUNT(w) FROM WhaleTransaction w WHERE w.bytecodeHash = :bytecodeHash AND w.isContractCreation = true AND w.timestamp >= :since")
+    long countByBytecodeHashSince(@Param("bytecodeHash") String bytecodeHash, @Param("since") Instant since);
     
     /**
      * Check if whale transaction exists by hash (optimized for batch operations)

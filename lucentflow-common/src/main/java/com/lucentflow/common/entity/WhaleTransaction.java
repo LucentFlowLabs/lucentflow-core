@@ -23,7 +23,8 @@ import java.time.Instant;
            @Index(name = "idx_wt_to_address", columnList = "to_address"),
            @Index(name = "idx_wt_block_number", columnList = "block_number"),
            @Index(name = "idx_wt_timestamp", columnList = "timestamp"),
-           @Index(name = "idx_wt_value_eth", columnList = "value_eth")
+           @Index(name = "idx_wt_value_eth", columnList = "value_eth"),
+           @Index(name = "idx_wt_bytecode_hash", columnList = "bytecode_hash")
        })
 @Getter
 @Setter
@@ -117,6 +118,12 @@ public class WhaleTransaction {
 
     @Column(name = "execution_status", length = 20)
     private String executionStatus;
+
+    /**
+     * SHA-256 hex (64 chars) of creation {@code input} — identical across clone deployments.
+     */
+    @Column(name = "bytecode_hash", length = 64)
+    private String bytecodeHash;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     @CreatedDate
