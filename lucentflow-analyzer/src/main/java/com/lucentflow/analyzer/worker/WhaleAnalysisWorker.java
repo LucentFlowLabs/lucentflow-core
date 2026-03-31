@@ -8,6 +8,8 @@ import com.lucentflow.common.utils.Sha256HexDigest;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.analyzer.service.AddressLabeler;
 import com.lucentflow.analyzer.service.AlertService;
+import com.lucentflow.analyzer.service.TagInferenceEngine;
+import com.lucentflow.analyzer.service.TagOracleService;
 import com.lucentflow.indexer.repository.WhaleTransactionRepository;
 import com.lucentflow.indexer.source.BaseBlockSource;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
@@ -57,6 +59,8 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private final BaseBlockSource blockSource;
     private final WhaleTransactionRepository whaleTransactionRepository;
     private final AlertService alertService;
+    private final TagOracleService tagOracleService;
+    private final TagInferenceEngine tagInferenceEngine;
     
     private final AtomicLong processedCount = new AtomicLong(0);
     private final AtomicLong whaleCount = new AtomicLong(0);
@@ -130,6 +134,10 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                             .toList();
 
                     if (!whaleBatch.isEmpty()) {
+                        for (WhaleTransaction w : whaleBatch) {
+                            tagInferenceEngine.inferCandidateTags(w);
+                            tagOracleService.applyResolvedTags(w);
+                        }
                         // Massive performance gain: SQL Batch Insert
                         int batchSize = whaleBatch.size();
                         whaleCount.addAndGet(batchSize);

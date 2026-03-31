@@ -72,16 +72,16 @@ public class WhaleTransaction {
     @Builder.Default
     private String transactionType = "UNKNOWN";
     
-    @Column(name = "from_address_tag", length = 50)
+    @Column(name = "from_address_tag", length = 100)
     private String fromAddressTag;
     
-    @Column(name = "to_address_tag", length = 20)
+    @Column(name = "to_address_tag", length = 100)
     private String toAddressTag;
     
     @Column(name = "whale_category", length = 30)
     private String whaleCategory;
     
-    @Column(name = "address_tag", length = 50)
+    @Column(name = "address_tag", length = 100)
     private String addressTag;
     
     @Column(name = "transaction_category", length = 30)
