@@ -3,9 +3,11 @@ package com.lucentflow.analyzer.worker;
 import com.lucentflow.common.constant.BaseChainConstants;
 import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.common.utils.EthUnitConverter;
+import com.lucentflow.common.utils.Erc20Decoder;
 import com.lucentflow.common.utils.Sha256HexDigest;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.analyzer.service.AddressLabeler;
+import com.lucentflow.analyzer.service.AlertService;
 import com.lucentflow.indexer.repository.WhaleTransactionRepository;
 import com.lucentflow.indexer.source.BaseBlockSource;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
@@ -16,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 import org.web3j.protocol.core.methods.response.Transaction;
+import org.web3j.protocol.core.methods.response.TransactionReceipt;
 import org.web3j.exceptions.MessageDecodingException;
 
 import java.math.BigDecimal;
@@ -23,6 +26,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
@@ -52,6 +56,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private final com.lucentflow.analyzer.service.RiskEngine riskEngine;
     private final BaseBlockSource blockSource;
     private final WhaleTransactionRepository whaleTransactionRepository;
+    private final AlertService alertService;
     
     private final AtomicLong processedCount = new AtomicLong(0);
     private final AtomicLong whaleCount = new AtomicLong(0);
@@ -138,6 +143,12 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                         CompletableFuture.runAsync(() -> {
                             try {
                                 whaleDatabaseSink.saveWhaleTransactions(whaleBatch);
+                                for (WhaleTransaction w : whaleBatch) {
+                                    Integer rs = w.getRiskScore();
+                                    if (rs != null && rs >= 70) {
+                                        alertService.sendHighRiskAlertAsync(w);
+                                    }
+                                }
                             } finally {
                                 dbSaveSemaphore.release();
                             }
@@ -211,6 +222,12 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         // 1. Always Capture Contract Creations (0 ETH threshold)
         if (tx.getTo() == null || tx.getTo().trim().isEmpty()) {
             log.debug("[FILTER-PASS] High-value/Creation detected: 0 ETH");
+            return true;
+        }
+
+        // Module 3: candidate ERC-20 calls to tracked Base core tokens (USDC, AERO, DEGEN).
+        if (Erc20Decoder.isCoreTokenContract(tx.getTo())) {
+            log.debug("[FILTER-PASS] Core token contract interaction (receipt decode required)");
             return true;
         }
 
@@ -313,13 +330,17 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         }
 
         // Transaction Integrity Audit: execution status + risk; Genesis Trace 2.0 when risk score > 40.
+        // Module 3: same receipt is used for ERC-20 Transfer decoding (core token list).
         return baseFuture.thenCompose(enrichedTx -> {
+            boolean tokenCandidate = Erc20Decoder.isCoreTokenContract(tx.getTo());
             // Performance budget: avoid receipt fetching for low-value contract calls.
             // Receipt calls are expensive (CU) and we only need them when:
             // - valueEth > 5.0, or
-            // - contract creation (to preserve integrity signal for factories).
+            // - contract creation (to preserve integrity signal for factories), or
+            // - candidate core-token contract (ERC-20 outpost).
             boolean shouldFetchReceipt = Boolean.TRUE.equals(whaleTx.getIsContractCreation())
-                    || (value != null && value.compareTo(new BigDecimal("5.0")) > 0);
+                    || (value != null && value.compareTo(new BigDecimal("5.0")) > 0)
+                    || tokenCandidate;
 
             if (!shouldFetchReceipt) {
                 applyRiskScoring(enrichedTx, tx);
@@ -327,16 +348,64 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                 return applyGenesisTraceIfHighRisk(enrichedTx, tx);
             }
 
-            return blockSource.fetchExecutionStatusAsync(tx.getHash())
-                    .thenCompose(status -> {
-                        if (status != null) {
-                            enrichedTx.setExecutionStatus(status);
-                        }
-                        applyRiskScoring(enrichedTx, tx);
-                        applyRevertRiskAdjustment(enrichedTx);
-                        return applyGenesisTraceIfHighRisk(enrichedTx, tx);
-                    });
+            return blockSource.fetchTransactionReceiptAsync(tx.getHash())
+                    .thenCompose(receiptOpt -> applyReceiptAndErc20Outpost(enrichedTx, tx, receiptOpt, tokenCandidate));
         });
+    }
+
+    /**
+     * Single receipt fetch: execution status (Module 1) + largest core-token Transfer (Module 3).
+     * Drops below-threshold ERC-20 candidates without emitting errors.
+     */
+    private CompletableFuture<WhaleTransaction> applyReceiptAndErc20Outpost(
+            WhaleTransaction enrichedTx,
+            Transaction tx,
+            Optional<TransactionReceipt> receiptOpt,
+            boolean tokenCandidate) {
+
+        TransactionReceipt receipt = receiptOpt.orElse(null);
+        if (receipt == null) {
+            if (tokenCandidate) {
+                return CompletableFuture.completedFuture(null);
+            }
+            applyRiskScoring(enrichedTx, tx);
+            applyRevertRiskAdjustment(enrichedTx);
+            return applyGenesisTraceIfHighRisk(enrichedTx, tx);
+        }
+
+        enrichedTx.setExecutionStatus(receipt.isStatusOK() ? "SUCCESS" : "REVERTED");
+
+        if (!Boolean.TRUE.equals(enrichedTx.getIsContractCreation())) {
+            Optional<Erc20Decoder.DecodedTransfer> dec = Erc20Decoder.findLargestCoreTokenTransfer(receipt);
+            if (dec.isPresent()) {
+                Erc20Decoder.DecodedTransfer dt = dec.get();
+                if (dt.humanAmount().compareTo(Erc20Decoder.MIN_WHALE_TOKEN_UNITS) > 0) {
+                    enrichedTx.setTransactionType("ERC20_TRANSFER");
+                    enrichedTx.setTokenSymbol(dt.symbol());
+                    enrichedTx.setTokenAddress(dt.tokenAddress());
+                    enrichedTx.setValueEth(dt.humanAmount());
+                    enrichedTx.setFromAddress(dt.from());
+                    enrichedTx.setToAddress(dt.to());
+                    enrichedTx.setIsContractCreation(false);
+                    String fl = addressLabeler.getAddressLabel(enrichedTx.getFromAddress());
+                    String tl = addressLabeler.getAddressLabel(enrichedTx.getToAddress());
+                    enrichedTx.setFromAddressTag(fl);
+                    enrichedTx.setToAddressTag(tl);
+                    enrichedTx.setAddressTag(fl);
+                    enrichedTx.setTransactionCategory(addressLabeler.getTransactionCategory(
+                            enrichedTx.getFromAddress(), enrichedTx.getToAddress(), enrichedTx.getValueEth()));
+                    enrichedTx.setWhaleCategory(BaseChainConstants.classifyWhaleSize(enrichedTx.getValueEth()));
+                } else {
+                    return CompletableFuture.completedFuture(null);
+                }
+            } else if (tokenCandidate) {
+                return CompletableFuture.completedFuture(null);
+            }
+        }
+
+        applyRiskScoring(enrichedTx, tx);
+        applyRevertRiskAdjustment(enrichedTx);
+        return applyGenesisTraceIfHighRisk(enrichedTx, tx);
     }
 
     private boolean shouldSkipTracingInCatchUp(BigDecimal valueEth) {

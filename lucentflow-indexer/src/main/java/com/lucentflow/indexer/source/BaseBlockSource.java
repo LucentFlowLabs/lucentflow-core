@@ -2,6 +2,7 @@ package com.lucentflow.indexer.source;
 
 import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
+import com.lucentflow.common.utils.Erc20Decoder;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.sdk.config.RpcProviderConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -13,6 +14,7 @@ import org.web3j.protocol.core.methods.response.EthBlock;
 import org.web3j.protocol.core.methods.response.EthBlockNumber;
 import org.web3j.protocol.core.methods.response.EthGetTransactionReceipt;
 import org.web3j.protocol.core.methods.response.Transaction;
+import org.web3j.protocol.core.methods.response.TransactionReceipt;
 
 import java.math.BigInteger;
 import java.util.List;
@@ -327,8 +329,21 @@ public class BaseBlockSource {
      * @return CompletableFuture resolving to "SUCCESS", "REVERTED" or null when unavailable
      */
     public CompletableFuture<String> fetchExecutionStatusAsync(String txHash) {
+        return fetchTransactionReceiptAsync(txHash).thenApply(opt -> opt
+                .map(r -> r.isStatusOK() ? "SUCCESS" : "REVERTED")
+                .orElse(null));
+    }
+
+    /**
+     * Fetches the full transaction receipt (logs + status) under the same RPC semaphore as block fetches.
+     * Used by Module 1 (execution status) and Module 3 (ERC-20 log decoding) with a single RPC round-trip.
+     *
+     * @param txHash transaction hash
+     * @return receipt when available
+     */
+    public CompletableFuture<Optional<TransactionReceipt>> fetchTransactionReceiptAsync(String txHash) {
         if (txHash == null || txHash.isBlank()) {
-            return CompletableFuture.completedFuture(null);
+            return CompletableFuture.completedFuture(Optional.empty());
         }
 
         return CompletableFuture.supplyAsync(() -> {
@@ -339,10 +354,9 @@ public class BaseBlockSource {
                     CompletableFuture<EthGetTransactionReceipt> future = web3j.ethGetTransactionReceipt(txHash).sendAsync();
                     EthGetTransactionReceipt response = future.orTimeout(rpcReceiptTimeoutSeconds, TimeUnit.SECONDS).join();
                     if (response == null || response.getTransactionReceipt().isEmpty()) {
-                        return null;
+                        return Optional.<TransactionReceipt>empty();
                     }
-                    var receipt = response.getTransactionReceipt().get();
-                    return receipt.isStatusOK() ? "SUCCESS" : "REVERTED";
+                    return Optional.of(response.getTransactionReceipt().get());
                 } finally {
                     rpcSemaphore.release();
                 }
@@ -423,6 +437,10 @@ public class BaseBlockSource {
         String to = tx.getTo();
         boolean isContractCreation = to == null || to.trim().isEmpty();
         if (isContractCreation) {
+            return true;
+        }
+        // Module 3: candidate ERC-20 interactions with tracked Base core tokens (decoded from receipt downstream).
+        if (Erc20Decoder.isCoreTokenContract(to)) {
             return true;
         }
         if (tx.getValue() == null) {

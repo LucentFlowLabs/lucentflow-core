@@ -61,8 +61,9 @@ public class WhaleDatabaseSink {
                 timestamp, is_contract_creation, gas_price, gas_limit, gas_cost_eth,
                 transaction_type, from_address_tag, to_address_tag, whale_category,
                 address_tag, transaction_category, funding_source_address, funding_source_tag,
-                rug_risk_level, risk_score, risk_reasons, execution_status, bytecode_hash, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                rug_risk_level, risk_score, risk_reasons, execution_status, bytecode_hash,
+                token_symbol, token_address, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (hash) DO UPDATE SET
                 risk_score = EXCLUDED.risk_score,
                 risk_reasons = EXCLUDED.risk_reasons,
@@ -71,6 +72,8 @@ public class WhaleDatabaseSink {
                 funding_source_tag = EXCLUDED.funding_source_tag,
                 execution_status = EXCLUDED.execution_status,
                 bytecode_hash = EXCLUDED.bytecode_hash,
+                token_symbol = EXCLUDED.token_symbol,
+                token_address = EXCLUDED.token_address,
                 updated_at = CURRENT_TIMESTAMP
             """;
 
@@ -120,10 +123,12 @@ public class WhaleDatabaseSink {
                     }
 
                     ps.setString(23, tx.getBytecodeHash());
+                    ps.setString(24, tx.getTokenSymbol());
+                    ps.setString(25, tx.getTokenAddress());
 
                     java.time.Instant now = java.time.Instant.now();
-                    ps.setTimestamp(24, Timestamp.from(tx.getCreatedAt() != null ? tx.getCreatedAt() : now));
-                    ps.setTimestamp(25, Timestamp.from(tx.getUpdatedAt() != null ? tx.getUpdatedAt() : now));
+                    ps.setTimestamp(26, Timestamp.from(tx.getCreatedAt() != null ? tx.getCreatedAt() : now));
+                    ps.setTimestamp(27, Timestamp.from(tx.getUpdatedAt() != null ? tx.getUpdatedAt() : now));
                 }
 
                 @Override

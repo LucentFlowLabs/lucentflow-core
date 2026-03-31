@@ -4,6 +4,7 @@ import okhttp3.ConnectionPool;
 import okhttp3.Dispatcher;
 import okhttp3.OkHttpClient;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -12,6 +13,8 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.web3j.protocol.Web3j;
 import org.web3j.protocol.http.HttpService;
 
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.time.Duration;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -117,7 +120,9 @@ public class Web3jAutoConfiguration {
      * @return configured OkHttpClient
      */
     @Bean
-    public OkHttpClient okHttpClient() {
+    public OkHttpClient okHttpClient(
+            @Value("${PROXY_HOST:}") String proxyHost,
+            @Value("${PROXY_PORT:}") String proxyPort) {
         // DISABLED: HttpLoggingInterceptor causes I/O backpressure and deadlocks during high-frequency scanning
         // HttpLoggingInterceptor loggingInterceptor = new HttpLoggingInterceptor();
         // loggingInterceptor.setLevel(HttpLoggingInterceptor.Level.BASIC);
@@ -130,16 +135,26 @@ public class Web3jAutoConfiguration {
         // Configure connection pool
         ConnectionPool connectionPool = new ConnectionPool(50, 5, TimeUnit.MINUTES);
 
-        return new OkHttpClient.Builder()
+        OkHttpClient.Builder builder = new OkHttpClient.Builder()
                 .connectTimeout(Duration.ofSeconds(30))
                 .readTimeout(Duration.ofSeconds(90))
                 .writeTimeout(Duration.ofSeconds(30))
                 .callTimeout(Duration.ofSeconds(120))
                 .connectionPool(connectionPool)
                 .dispatcher(dispatcher)
-                .retryOnConnectionFailure(true)
-                // DISABLED: .addInterceptor(loggingInterceptor)
-                .build();
+                .retryOnConnectionFailure(true);
+
+        if (proxyHost != null && !proxyHost.isBlank() && proxyPort != null && !proxyPort.isBlank()) {
+            try {
+                int port = Integer.parseInt(proxyPort.trim());
+                builder.proxy(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxyHost.trim(), port)));
+                log.info("[HTTP-CLIENT] Outbound HTTP proxy enabled: {}:{}", proxyHost.trim(), port);
+            } catch (NumberFormatException e) {
+                log.warn("[HTTP-CLIENT] Invalid PROXY_PORT '{}', proxy disabled.", proxyPort);
+            }
+        }
+
+        return builder.build();
     }
 
     /**

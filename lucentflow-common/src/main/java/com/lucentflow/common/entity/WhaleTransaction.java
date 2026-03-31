@@ -24,7 +24,8 @@ import java.time.Instant;
            @Index(name = "idx_wt_block_number", columnList = "block_number"),
            @Index(name = "idx_wt_timestamp", columnList = "timestamp"),
            @Index(name = "idx_wt_value_eth", columnList = "value_eth"),
-           @Index(name = "idx_wt_bytecode_hash", columnList = "bytecode_hash")
+           @Index(name = "idx_wt_bytecode_hash", columnList = "bytecode_hash"),
+           @Index(name = "idx_wt_token_address", columnList = "token_address")
        })
 @Getter
 @Setter
@@ -124,6 +125,14 @@ public class WhaleTransaction {
      */
     @Column(name = "bytecode_hash", length = 64)
     private String bytecodeHash;
+
+    /** Core ERC-20 symbol when {@link #transactionType} is {@code ERC20_TRANSFER}. */
+    @Column(name = "token_symbol", length = 32)
+    private String tokenSymbol;
+
+    /** ERC-20 contract address (Base mainnet). */
+    @Column(name = "token_address", length = 42)
+    private String tokenAddress;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     @CreatedDate
