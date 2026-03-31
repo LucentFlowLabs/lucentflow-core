@@ -6,7 +6,7 @@
 # LucentFlow BI Intelligence: Metabase SQL Specification
 This document serves as the Source of Truth for the LucentFlow monitoring dashboards. It defines the SQL logic used to transform raw Base chain transaction data into actionable security intelligence.
 
-**Schema alignment (v1.1+):** The `whale_transactions` table exposes analyzer outputs including `risk_score`, `risk_reasons`, `rug_risk_level`, `execution_status` (`SUCCESS` | `REVERTED`), and genesis fields `funding_source_address` / `funding_source_tag`. Dashboard SQL below references these where they add signal (especially Security Sentinel).
+**Schema alignment (v1.1.1-SNAPSHOT):** The `whale_transactions` table exposes analyzer outputs including `risk_score`, `risk_reasons`, `rug_risk_level`, `execution_status` (`SUCCESS` | `REVERTED`), and genesis fields `funding_source_address` / `funding_source_tag`. The `sync_status` table (ID 1 Protocol) exposes heartbeat metrics including `chain_head_block`, `last_scanned_block`, `block_lag`, and `blocks_per_second`.
 
 ## 📊 Dashboard Overview
 The LucentFlow command center is divided into four critical analytical dimensions:
@@ -14,6 +14,43 @@ Whale Sentinel: Real-time capital flow tracking.
 Security Sentinel: High-risk contract interaction monitoring.
 Macro Ecology: Whale population distribution.
 Activity Intelligence: Temporal behavioral analysis.
+
+## [System Health] Sync Pulse | Real-time Block Lag
+Objective: Monitor ingestion latency and throughput of the Java 21 Virtual Thread engine.
+
+```sql
+SELECT 
+    block_lag AS "Sync Lag",
+    ROUND(blocks_per_second::numeric, 2) AS "BPS",
+    last_scanned_block AS "Current Progress",
+    chain_head_block AS "Chain Head",
+    updated_at AS "Last Heartbeat"
+FROM sync_status
+WHERE id = 1;
+```
+
+* Visualization: Gauge (Range: 0-10 Green, 10-5000 Blue, 5000+ Grey) and Number cards.
+
+## [Security] Forensic Sentinel | High-Risk Feed
+Objective: The primary command feed for high-risk transaction auditing, integrating Risk Scoring, Revert Detection, and Origin Tracing.
+
+```sql
+SELECT
+    timestamp AS "Audit Time",
+    execution_status AS "Status",
+    risk_score AS "Score",
+    risk_reasons AS "Detection Logic",
+    COALESCE(from_address_tag, LEFT(from_address, 6) || '...' || RIGHT(from_address, 4)) AS "Initiator",
+    COALESCE(funding_source_tag, 'UNKNOWN') AS "Origin",
+    ROUND(value_eth::numeric, 2) || ' ' || COALESCE(token_symbol, 'ETH') AS "Amount",
+    hash AS "tx_hash"
+FROM whale_transactions
+WHERE risk_score >= 20
+ORDER BY risk_score DESC, timestamp DESC
+LIMIT 50;
+```
+
+* Visualization: Table with "Highlight Whole Row" enabled (Score > 80: Deep Red, Score 40-80: Orange).
 ## 1. Whale Sentinel: Top 10 Inflow (24h)
 Objective: Identify the top "magnets" of liquidity on the Base network within the last 24 hours.
 ```sql
