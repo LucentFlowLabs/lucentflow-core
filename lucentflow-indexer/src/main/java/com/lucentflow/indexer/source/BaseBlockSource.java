@@ -3,6 +3,7 @@ package com.lucentflow.indexer.source;
 import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.common.utils.Erc20Decoder;
+import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.sdk.config.RpcProviderConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -29,7 +30,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.core.functions.CheckedSupplier;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -49,8 +49,8 @@ public class BaseBlockSource {
     private final SyncStatusRepository syncStatusRepository;
     private final TransactionPipe transactionPipe;
 
-    /** Unified backpressure: permit count from {@link RpcProviderConfig} (professional vs public RPC). */
-    private final Semaphore rpcSemaphore;
+    /** Unified backpressure: fair permits with optional catch-up scaling via {@link RpcConcurrencyGovernor}. */
+    private final RpcConcurrencyGovernor rpcConcurrencyGovernor;
     
     // Virtual Thread Executor for non-blocking Async RPC calls
     private final ExecutorService rpcExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -69,12 +69,13 @@ public class BaseBlockSource {
                            SyncStatusRepository syncStatusRepository,
                            TransactionPipe transactionPipe,
                            RpcProviderConfig rpcProviderConfig,
+                           RpcConcurrencyGovernor rpcConcurrencyGovernor,
                            ObjectProvider<org.flywaydb.core.Flyway> flywayProvider) {
         this.web3j = web3j;
         this.syncStatusRepository = syncStatusRepository;
         this.transactionPipe = transactionPipe;
+        this.rpcConcurrencyGovernor = rpcConcurrencyGovernor;
         int permits = rpcProviderConfig.recommendedRpcSemaphorePermits();
-        this.rpcSemaphore = new Semaphore(permits, true);
         // Timeout calibration: professional endpoints should fail fast and retry.
         int timeoutSeconds = switch (rpcProviderConfig.providerType()) {
             case PROFESSIONAL -> 10;
@@ -269,8 +270,8 @@ public class BaseBlockSource {
         CheckedSupplier<EthBlock.Block> blockSupplier = Retry.decorateCheckedSupplier(retryConfig, () -> {
             try {
                 // Apply strict backpressure using Semaphore
-                log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcSemaphore.getQueueLength());
-                rpcSemaphore.acquire();
+                log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcConcurrencyGovernor.getQueueLength());
+                rpcConcurrencyGovernor.acquire();
                 try {
                     // Execute the blocking RPC call on a virtual thread to prevent ForkJoinPool starvation
                     CompletableFuture<EthBlock> future = CompletableFuture.supplyAsync(() -> {
@@ -291,7 +292,7 @@ public class BaseBlockSource {
                     }
                     return block.getBlock();
                 } finally {
-                    rpcSemaphore.release();
+                    rpcConcurrencyGovernor.release();
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -321,7 +322,7 @@ public class BaseBlockSource {
     /**
      * Fetches transaction receipt execution status with unified backpressure control.
      *
-     * <p>This method is guarded by the same {@code rpcSemaphore} used for block fetches to ensure
+     * <p>This method is guarded by the same {@code rpcConcurrencyGovernor} used for block fetches to ensure
      * the public RPC node is not overwhelmed. Fair semaphore ordering (FIFO) prevents starvation
      * across block and receipt requests.</p>
      *
@@ -348,8 +349,8 @@ public class BaseBlockSource {
 
         return CompletableFuture.supplyAsync(() -> {
             try {
-                log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcSemaphore.getQueueLength());
-                rpcSemaphore.acquire();
+                log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcConcurrencyGovernor.getQueueLength());
+                rpcConcurrencyGovernor.acquire();
                 try {
                     CompletableFuture<EthGetTransactionReceipt> future = web3j.ethGetTransactionReceipt(txHash).sendAsync();
                     EthGetTransactionReceipt response = future.orTimeout(rpcReceiptTimeoutSeconds, TimeUnit.SECONDS).join();
@@ -358,7 +359,7 @@ public class BaseBlockSource {
                     }
                     return Optional.of(response.getTransactionReceipt().get());
                 } finally {
-                    rpcSemaphore.release();
+                    rpcConcurrencyGovernor.release();
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -368,7 +369,7 @@ public class BaseBlockSource {
     }
 
     /**
-     * Runs a blocking RPC call under the shared fair {@code rpcSemaphore}.
+     * Runs a blocking RPC call under the shared fair {@code rpcConcurrencyGovernor}.
      * Use for any Web3j traffic that must participate in unified backpressure with
      * block and receipt fetches (prevents permit leaks via {@code finally} release).
      *
@@ -378,12 +379,12 @@ public class BaseBlockSource {
      */
     public <T> T runWithRpcPermit(Callable<T> action) {
         try {
-            log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcSemaphore.getQueueLength());
-            rpcSemaphore.acquire();
+            log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcConcurrencyGovernor.getQueueLength());
+            rpcConcurrencyGovernor.acquire();
             try {
                 return action.call();
             } finally {
-                rpcSemaphore.release();
+                rpcConcurrencyGovernor.release();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

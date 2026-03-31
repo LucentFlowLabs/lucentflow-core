@@ -120,9 +120,15 @@ public class Web3jAutoConfiguration {
      * @return configured OkHttpClient
      */
     @Bean
+    public RpcEndpointState rpcEndpointState(Web3jProperties web3jProperties) {
+        return new RpcEndpointState(web3jProperties.getRpcUrl(), web3jProperties.getRpcBackupUrl());
+    }
+
+    @Bean
     public OkHttpClient okHttpClient(
             @Value("${PROXY_HOST:}") String proxyHost,
-            @Value("${PROXY_PORT:}") String proxyPort) {
+            @Value("${PROXY_PORT:}") String proxyPort,
+            RpcEndpointState rpcEndpointState) {
         // DISABLED: HttpLoggingInterceptor causes I/O backpressure and deadlocks during high-frequency scanning
         // HttpLoggingInterceptor loggingInterceptor = new HttpLoggingInterceptor();
         // loggingInterceptor.setLevel(HttpLoggingInterceptor.Level.BASIC);
@@ -136,6 +142,7 @@ public class Web3jAutoConfiguration {
         ConnectionPool connectionPool = new ConnectionPool(50, 5, TimeUnit.MINUTES);
 
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
+                .addInterceptor(new RpcFailoverInterceptor(rpcEndpointState))
                 .connectTimeout(Duration.ofSeconds(30))
                 .readTimeout(Duration.ofSeconds(90))
                 .writeTimeout(Duration.ofSeconds(30))
@@ -201,6 +208,8 @@ public class Web3jAutoConfiguration {
     @ConfigurationProperties(prefix = "lucentflow.chain")
     public static class Web3jProperties {
         private String rpcUrl;
+        /** Fallback JSON-RPC URL when primary returns 4xx/5xx or I/O failure (5-minute cooldown). */
+        private String rpcBackupUrl = "https://mainnet.base.org";
 
         public String getRpcUrl() {
             return rpcUrl;
@@ -208,6 +217,14 @@ public class Web3jAutoConfiguration {
 
         public void setRpcUrl(String rpcUrl) {
             this.rpcUrl = rpcUrl;
+        }
+
+        public String getRpcBackupUrl() {
+            return rpcBackupUrl;
+        }
+
+        public void setRpcBackupUrl(String rpcBackupUrl) {
+            this.rpcBackupUrl = rpcBackupUrl;
         }
     }
 }

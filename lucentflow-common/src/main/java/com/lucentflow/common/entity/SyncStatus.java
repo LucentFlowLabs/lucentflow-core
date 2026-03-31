@@ -36,6 +36,15 @@ public class SyncStatus {
     @Column(name = "last_scanned_block", nullable = false)
     private Long lastScannedBlock;
 
+    @Column(name = "chain_head_block")
+    private Long chainHeadBlock;
+
+    @Column(name = "block_lag")
+    private Long blockLag;
+
+    @Column(name = "blocks_per_second")
+    private Double blocksPerSecond;
+
     @Column(name = "updated_at", nullable = false)
     @LastModifiedDate
     private LocalDateTime updatedAt;

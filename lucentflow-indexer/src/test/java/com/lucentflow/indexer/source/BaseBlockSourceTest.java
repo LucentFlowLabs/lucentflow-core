@@ -2,6 +2,7 @@ package com.lucentflow.indexer.source;
 
 import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
+import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.sdk.config.RpcProviderConfig;
 import com.lucentflow.sdk.config.RpcProviderType;
@@ -86,7 +87,9 @@ class BaseBlockSourceTest {
         when(flywayProvider.getIfAvailable()).thenReturn(null);
 
         RpcProviderConfig rpcProviderConfig = new RpcProviderConfig(RpcProviderType.PUBLIC, 2, 50, 3000L);
-        baseBlockSource = new BaseBlockSource(web3j, syncStatusRepository, transactionPipe, rpcProviderConfig, flywayProvider);
+        RpcConcurrencyGovernor rpcConcurrencyGovernor = new RpcConcurrencyGovernor(rpcProviderConfig);
+        baseBlockSource = new BaseBlockSource(web3j, syncStatusRepository, transactionPipe, rpcProviderConfig,
+                rpcConcurrencyGovernor, flywayProvider);
     }
 
     /** ID=1 protocol: checkpoint row used by {@code initializeLastScannedBlock} / {@code resolveStartBlock}. */

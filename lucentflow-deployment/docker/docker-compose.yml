@@ -92,6 +92,7 @@ services:
       BASESCAN_API_KEY: ${BASESCAN_API_KEY:-}
       BASESCAN_BASE_URL: https://api.basescan.org/api
       LUCENTFLOW_CHAIN_RPC_URL: ${LUCENTFLOW_CHAIN_RPC_URL:-https://mainnet.base.org}
+      LUCENTFLOW_CHAIN_RPC_BACKUP_URL: ${LUCENTFLOW_CHAIN_RPC_BACKUP_URL:-https://mainnet.base.org}
     ports:
       - "8080:8080"
     networks:

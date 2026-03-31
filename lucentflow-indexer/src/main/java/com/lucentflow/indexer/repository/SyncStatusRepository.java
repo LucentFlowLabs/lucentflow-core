@@ -77,4 +77,18 @@ public interface SyncStatusRepository extends JpaRepository<SyncStatus, Long> {
             nativeQuery = true
     )
     void upsertProgress(@Param("id") Long id, @Param("block") Long block);
+
+    /**
+     * Observability heartbeat: chain tip, lag, and approximate throughput (ID=1 protocol).
+     */
+    @Modifying
+    @Transactional
+    @Query(value = "UPDATE sync_status SET chain_head_block = :head, block_lag = :lag, "
+            + "blocks_per_second = :bps, updated_at = :updatedAt WHERE id = :id",
+            nativeQuery = true)
+    int updateSyncMetrics(@Param("id") Long id,
+                          @Param("head") Long head,
+                          @Param("lag") Long lag,
+                          @Param("bps") Double bps,
+                          @Param("updatedAt") Instant updatedAt);
 }

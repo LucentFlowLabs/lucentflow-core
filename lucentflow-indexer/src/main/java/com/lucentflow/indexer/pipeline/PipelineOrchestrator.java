@@ -1,6 +1,7 @@
 package com.lucentflow.indexer.pipeline;
 
 import com.lucentflow.common.pipeline.TransactionPipe;
+import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
 import com.lucentflow.indexer.source.BaseBlockSource;
@@ -15,6 +16,7 @@ import org.web3j.protocol.core.methods.response.EthBlock;
 import jakarta.annotation.PreDestroy;
 import java.time.Instant;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
@@ -42,7 +44,12 @@ public class PipelineOrchestrator {
     private final SyncStatusRepository syncStatusRepository;
     private final TransactionPipe transactionPipe;
     private final JdbcTemplate jdbcTemplate;
+    private final RpcConcurrencyGovernor rpcConcurrencyGovernor;
     private final Random random = new Random();
+
+    /** Samples for approximate blocks/sec between heartbeats. */
+    private final AtomicLong heartbeatSampleHead = new AtomicLong(-1L);
+    private final AtomicLong heartbeatSampleNanos = new AtomicLong(0L);
     
     // T10 Standard: Private Virtual Thread Executor to prevent ForkJoinPool leaks
     private final ExecutorService pipelineExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -66,12 +73,14 @@ public class PipelineOrchestrator {
                                 SyncStatusRepository syncStatusRepository,
                                 TransactionPipe transactionPipe,
                                 RpcProviderConfig rpcProviderConfig,
-                                JdbcTemplate jdbcTemplate) {
+                                JdbcTemplate jdbcTemplate,
+                                RpcConcurrencyGovernor rpcConcurrencyGovernor) {
         this.blockSource = blockSource;
         this.whaleDatabaseSink = whaleDatabaseSink;
         this.syncStatusRepository = syncStatusRepository;
         this.transactionPipe = transactionPipe;
         this.jdbcTemplate = jdbcTemplate;
+        this.rpcConcurrencyGovernor = rpcConcurrencyGovernor;
         this.pipelineChunkSize = rpcProviderConfig.recommendedPipelineChunkSize();
         this.interBatchSleepMillis = rpcProviderConfig.interBatchSleepMillis();
     }
@@ -335,6 +344,8 @@ public class PipelineOrchestrator {
                         lastProcessedBlock, memEx.toString());
             }
 
+            recordHeartbeatAndCatchUpTuning(lastProcessedBlock);
+
             // Reduce INFO noise: only show periodic sync progress.
             boolean shouldLogSync = (lastProcessedBlock % 1000L == 0) || lastProcessedBlock == targetEndBlock;
             if (shouldLogSync) {
@@ -350,6 +361,38 @@ public class PipelineOrchestrator {
                         lastProcessedBlock, e.toString());
             }
         }
+    }
+
+    /**
+     * Persists chain tip, lag, and throughput to {@code sync_status} (ID=1) and tunes RPC concurrency when far behind.
+     */
+    private void recordHeartbeatAndCatchUpTuning(long lastProcessedBlock) {
+        try {
+            long chainHead = blockSource.getLatestBlockNumber();
+            long lag = Math.max(0L, chainHead - lastProcessedBlock);
+            double bps = computeBlocksPerSecond(chainHead);
+            syncStatusRepository.updateSyncMetrics(1L, chainHead, lag, bps, Instant.now());
+            rpcConcurrencyGovernor.adjustForLag(lag);
+            log.info("[HEARTBEAT] Chain Head: {}, Our Progress: {}, Lag: {} blocks", chainHead, lastProcessedBlock, lag);
+        } catch (Exception e) {
+            log.debug("[HEARTBEAT] skipped: {}", e.getMessage());
+        }
+    }
+
+    private double computeBlocksPerSecond(long chainHead) {
+        long prevHead = heartbeatSampleHead.get();
+        long prevNs = heartbeatSampleNanos.get();
+        long nowNs = System.nanoTime();
+        heartbeatSampleHead.set(chainHead);
+        heartbeatSampleNanos.set(nowNs);
+        if (prevHead < 0L || prevNs <= 0L) {
+            return 0.0;
+        }
+        double dt = (nowNs - prevNs) / 1_000_000_000.0;
+        if (dt <= 0.0) {
+            return 0.0;
+        }
+        return Math.max(0.0, (chainHead - prevHead) / dt);
     }
 
     /**
