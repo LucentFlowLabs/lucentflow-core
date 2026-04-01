@@ -1,10 +1,16 @@
-# LucentFlow Core (v1.0.1-SNAPSHOT)
+<!--
+  LucentFlow project overview and operator quick start.
+  @author ArchLucent
+  @since 1.0
+-->
+
+# LucentFlow Core (v1.1.1-SNAPSHOT)
 
 ![Java 21](https://img.shields.io/badge/Java-21-orange?style=flat&logo=java)
 ![Spring Boot 3.4](https://img.shields.io/badge/Spring%20Boot-3.4-brightgreen?style=flat&logo=spring-boot)
 ![Base L2](https://img.shields.io/badge/Base-L2-blue?style=flat)
 ![Docker Ready](https://img.shields.io/badge/Docker-Ready-blue?style=flat&logo=docker)
-![Version](https://img.shields.io/badge/Version-1.0.1--SNAPSHOT-blue?style=flat)
+![Version](https://img.shields.io/badge/Version-1.1.1--SNAPSHOT-blue?style=flat)
 
 
 
@@ -33,6 +39,26 @@
     - ✅ **Clean-room Implementation**: Manual Keccak-256 address derivation bypassing high-level library abstractions.
 - **High-Performance Pipeline**: Virtual thread-based architecture achieving massive I/O throughput with minimal memory footprint.
 - **Base Oracle Integration**: Built-in 5s TTL cache for Base L2 GasPriceOracle to mitigate RPC rate-limiting.
+
+---
+
+## 🧠 Smart RPC Orchestration (Auto-Tuned Throughput)
+LucentFlow automatically detects your JSON-RPC provider tier from `LUCENTFLOW_CHAIN_RPC_URL` and applies provider-aware tuning:
+
+- **Public RPC**: Conservative concurrency limits and inter-batch pacing to prevent 429 throttling (e.g., `https://mainnet.base.org`).
+- **Professional RPC** (Alchemy / QuickNode / Infura / BlastAPI): Higher concurrency and larger checkpoint chunks with a fixed breathing interval to keep rate-limit buckets stable.
+
+This orchestration is powered by `RpcProviderType.fromRpcUrl(...)` and `RpcProviderConfig` auto-derived defaults.
+
+---
+
+## 🛡️ High Availability (JSON-RPC Auto-Failover)
+LucentFlow includes an OkHttp interceptor (`RpcFailoverInterceptor`) that provides automatic JSON-RPC failover:
+
+- On **HTTP 4xx/5xx** or **I/O failures** (timeouts, connection resets), traffic is rerouted to `LUCENTFLOW_CHAIN_RPC_BACKUP_URL`.
+- Failover remains active for a **5-minute backup window**, then the client re-attempts the primary endpoint.
+
+---
 
 ---
 
@@ -94,7 +120,10 @@ Ideal for private auditors, institutional investors, and protocol teams. No loca
 If you prefer not to use our startup scripts, prepare your environment manually:
 ```bash
 cp lucentflow-deployment/docker/.env.example lucentflow-deployment/docker/.env
-# Edit .env to add your BASESCAN_API_KEY
+# Edit .env to set:
+# - LUCENTFLOW_CHAIN_RPC_URL (Smart RPC tier auto-detection)
+# - LUCENTFLOW_CHAIN_RPC_BACKUP_URL (5-minute failover window)
+# - BASESCAN_API_KEY (required for deep forensics)
 ```
 
 #### 2. Automated Startup
@@ -173,6 +202,10 @@ Access your security dashboard:
 - **Metabase Dashboards**: [http://localhost:3000](http://localhost:3000) (Visualize capital inflow/outflow)
 - **Interactive API Console**: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html)
 - **Database Management (pgAdmin)**: [http://localhost:5050](http://localhost:5050)
+
+Operator references:
+- Metabase dashboard SQL source of truth: `docs/metabase.md`
+- Infrastructure architecture and reliability model: `docs/INFRASTRUCTURE.md`
 
 ## ⚖️ License
 

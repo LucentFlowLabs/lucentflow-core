@@ -77,8 +77,11 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     // Non-final to avoid being pulled into Lombok-generated constructor params.
     private Semaphore dbSaveSemaphore = new Semaphore(2);
 
-    private static final int BATCH_SIZE = 50;
-    private static final int CONCURRENCY = 3; // Number of parallel virtual thread workers
+    private static final int BATCH_SIZE = 100;
+    private static final int CONCURRENCY = 10; // Number of parallel virtual thread workers
+
+    private static final long CATCH_UP_LAG_THRESHOLD_BLOCKS = 500L;
+    private static final int CATCH_UP_TRACE_MIN_RISK_SCORE = 60;
 
     @Override
     public void run(String... args) {
@@ -473,6 +476,9 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         if (score == null || score <= 40) {
             return CompletableFuture.completedFuture(whaleTx);
         }
+        if (shouldSkipDeepOriginTrace(score)) {
+            return CompletableFuture.completedFuture(whaleTx);
+        }
         String initiator = tx.getFrom();
         if (initiator == null || initiator.isBlank()) {
             return CompletableFuture.completedFuture(whaleTx);
@@ -489,6 +495,41 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
             });
             return whaleTx;
         });
+    }
+
+    /**
+     * Catch-up protection: when ingestion lag is high, skip deep origin tracing for lower-risk whales
+     * to keep the TransactionPipe draining and prevent [STALL-ALERT].
+     */
+    private boolean shouldSkipDeepOriginTrace(int riskScore) {
+        if (riskScore >= CATCH_UP_TRACE_MIN_RISK_SCORE) {
+            return false;
+        }
+        Long lag = getBlockLagCached();
+        return lag != null && lag > CATCH_UP_LAG_THRESHOLD_BLOCKS;
+    }
+
+    private Long getBlockLagCached() {
+        // Reuse existing 5s sampling window to avoid hot-looping RPC calls.
+        long now = System.currentTimeMillis();
+        long last = catchUpCheckAtMs.get();
+        if (now - last < 5_000L) {
+            return computeBlockLagSilently();
+        }
+        if (!catchUpCheckAtMs.compareAndSet(last, now)) {
+            return computeBlockLagSilently();
+        }
+        return computeBlockLagSilently();
+    }
+
+    private Long computeBlockLagSilently() {
+        try {
+            long lastScanned = blockSource.getLastScannedBlock();
+            long head = blockSource.getLatestBlockNumber();
+            return Math.max(0L, head - lastScanned);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private void appendRiskReason(WhaleTransaction whaleTx, String reason) {

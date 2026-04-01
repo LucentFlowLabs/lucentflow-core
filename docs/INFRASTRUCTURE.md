@@ -1,3 +1,9 @@
+<!--
+  LucentFlow Infrastructure Architecture (operator reference).
+  @author ArchLucent
+  @since 1.0
+-->
+
 # LucentFlow Infrastructure Architecture
 
 ## 🏗️ Docker-First Private Deployment
@@ -192,6 +198,19 @@ docker compose logs -f lucentflow-api | grep health
 
 ---
 
+## ✅ Deterministic Resume: ID 1 Checkpoint Protocol
+LucentFlow uses a deterministic checkpoint strategy to eliminate redundant scanning and guarantee safe resumes:
+
+- The `sync_status` table stores ingestion progress and heartbeat metrics.
+- **ID 1 Protocol**: the row with `id = 1` is the single source of truth for resume state.
+- On startup / scan scheduling:
+  - If `sync_status.id=1.last_scanned_block > 0`, the indexer resumes from `last_scanned_block + 1`.
+  - If the row is missing or `last_scanned_block = 0` (sentinel), the indexer falls back to `LUCENTFLOW_INDEXER_START_BLOCK` (first boot only), otherwise `latest - 10`.
+
+This protocol ensures the pipeline can restart deterministically without re-indexing large ranges, while still allowing an explicit first-boot checkpoint via `.env`.
+
+---
+
 ## 🛡️ Security Hardening
 
 ### Container Security Model
@@ -264,6 +283,42 @@ spring:
 - **I/O Optimization**: Massive concurrent request handling
 - **Memory Efficiency**: Minimal thread stack overhead
 - **Throughput**: 300%+ improvement over traditional threading
+
+---
+
+## 🚦 Performance Tuning (Alchemy Free Tier Sweet Spot)
+For Alchemy free-tier accounts (rate-limited by CUPS), LucentFlow uses a conservative “stability-first” tuning profile:
+
+- **RPC concurrency**: 15 permits (fair semaphore backpressure via `RpcConcurrencyGovernor`)
+- **Checkpoint chunk size**: 100 blocks per batch
+- **Breathing interval**: 500ms between batch chunks (prevents bursty 429s and lets the rate-limit bucket refill)
+
+If you operate on paid/dedicated infrastructure, these values can be increased safely, but the free-tier defaults prioritize “0 noisy errors” over peak burst throughput.
+
+Receipt strategy (intelligence-first):
+- Receipt calls are expensive (CUPS). The pipeline only fetches receipts when needed (contract creation, high-value calls, or core-token candidates) to preserve forensics while keeping throughput stable.
+
+---
+
+## 🌐 Networking: JSON-RPC Auto-Failover (5-Minute Backup Window)
+LucentFlow provides high availability for JSON-RPC via OkHttp:
+
+- `RpcFailoverInterceptor` rewrites outgoing requests to the current endpoint selected by `RpcEndpointState`.
+- Trigger conditions:
+  - **HTTP 4xx/5xx** responses (including 429 rate limiting)
+  - **I/O failures** (timeouts, connection resets)
+- After a trigger, the client routes traffic to `LUCENTFLOW_CHAIN_RPC_BACKUP_URL` for **5 minutes**, then automatically attempts the primary again.
+
+This design prevents transient vendor issues from stalling ingestion while remaining deterministic and observable in logs.
+
+---
+
+## 📡 Observability: System Heartbeat (Block Lag Dashboard)
+LucentFlow exposes real-time system health metrics via `sync_status` (ID 1 Protocol) and a dedicated Metabase dashboard component:
+
+- **Sync Pulse / Block Lag**: `block_lag`, `blocks_per_second`, `last_scanned_block`, `chain_head_block`, `updated_at`
+
+See `docs/metabase.md` for the exact SQL queries and visualization specifications used in production dashboards.
 
 ---
 

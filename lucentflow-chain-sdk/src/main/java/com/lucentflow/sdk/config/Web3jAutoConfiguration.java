@@ -197,7 +197,7 @@ public class Web3jAutoConfiguration {
         // Alchemy / QuickNode / Infura / BlastAPI: conservative free-tier throttling.
         return switch (type) {
             // Professional endpoints: prioritize continuity over burst throughput.
-            case PROFESSIONAL -> new RpcProviderConfig(type, 10, 50, 1500L);
+            case PROFESSIONAL -> new RpcProviderConfig(type, 15, 100, 500L);
             case PUBLIC -> new RpcProviderConfig(type, 2, 50, 3000L);
         };
     }

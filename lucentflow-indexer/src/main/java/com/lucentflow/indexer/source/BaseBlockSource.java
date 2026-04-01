@@ -98,7 +98,6 @@ public class BaseBlockSource {
         flywayProvider.getIfAvailable();
         
         // Configure retry with exponential backoff + jitter.
-        // 429 gets an extra 10s sleep before retry starts to wait out rate-limit reset.
         // Note: do not combine waitDuration() with intervalFunction() — Resilience4j treats both as interval config and throws IllegalStateException.
         this.retryConfig = Retry.of("web3jRetry", RetryConfig.custom()
             .maxAttempts(5)
@@ -111,26 +110,6 @@ public class BaseBlockSource {
                 // Exponential backoff with randomization (jitter) to avoid synchronized retries.
                 io.github.resilience4j.core.IntervalFunction.ofExponentialRandomBackoff(5_000L, 2.0, 0.2, 60_000L)
             )
-            .retryOnException(ex -> {
-                String message = ex.getMessage();
-                boolean is429 = message != null && message.toLowerCase().contains("429");
-                boolean isRateLimit = message != null && (
-                        message.toLowerCase().contains("too many requests") ||
-                        message.toLowerCase().contains("rate limit")
-                );
-
-                // If it's a rate-limit hit, sleep extra before retry starts.
-                if (is429 || isRateLimit) {
-                    try {
-                        Thread.sleep(10_000L);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        return false;
-                    }
-                }
-                // retryExceptions already restrict which exception types are eligible.
-                return true;
-            })
             .build());
     }
     

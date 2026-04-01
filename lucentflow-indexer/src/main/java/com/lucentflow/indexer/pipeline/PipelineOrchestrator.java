@@ -17,6 +17,7 @@ import jakarta.annotation.PreDestroy;
 import java.time.Instant;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
@@ -55,7 +56,7 @@ public class PipelineOrchestrator {
     private final ExecutorService pipelineExecutor = Executors.newVirtualThreadPerTaskExecutor();
     
     // Shutdown awareness flag
-    private volatile boolean isShuttingDown = false;
+    private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;
 
@@ -124,6 +125,11 @@ public class PipelineOrchestrator {
                 final long chunkEnd = Math.min(chunkStart + pipelineChunkSize - 1, endBlock);
                 long blocksInChunk = chunkEnd - chunkStart + 1;
 
+                if (isShuttingDown.get()) {
+                    log.info("Pipeline shutdown requested. Stopping scan loop before processing chunk {}–{}.", chunkStart, chunkEnd);
+                    break;
+                }
+
                 if (!isDatabasePoolAlive()) {
                     log.warn("[DB-PREFLIGHT] Skipping chunk {}–{}; pool unreachable — will retry on next scheduler tick",
                             chunkStart, chunkEnd);
@@ -139,17 +145,21 @@ public class PipelineOrchestrator {
                 // CHECKPOINT: persist progress using ID 1 Protocol after each chunk.
                 // Async checkpoint reduces idle time between chunks; losing a checkpoint only
                 // causes reprocessing (idempotent upsert), not data loss.
-                checkpointFutures.add(
-                        java.util.concurrent.CompletableFuture.runAsync(
-                                () -> checkpointProgress(chunkEnd, endBlock),
-                                pipelineExecutor
-                        )
-                );
+                if (isShuttingDown.get()) {
+                    log.info("Pipeline shutdown requested. Skipping checkpoint submission for chunkEnd={}.", chunkEnd);
+                    break;
+                }
+                checkpointFutures.add(java.util.concurrent.CompletableFuture.runAsync(
+                        () -> checkpointProgress(chunkEnd, endBlock),
+                        pipelineExecutor
+                ));
                 
                 // Inter-batch delay: provider tier dependent (used to prevent anti-spam/bursts).
-                if (chunkEnd < endBlock && interBatchSleepMillis > 0) {
+                // Professional breathing interval: ensure at least 500ms even when provider config is 0.
+                long sleepMillis = Math.max(interBatchSleepMillis, 500L);
+                if (chunkEnd < endBlock && sleepMillis > 0) {
                     try {
-                        Thread.sleep(interBatchSleepMillis);
+                        Thread.sleep(sleepMillis);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         log.warn("Pipeline orchestrator interrupted during inter-batch delay");
@@ -245,7 +255,7 @@ public class PipelineOrchestrator {
                         }
                         
                         // Check shutdown flag before processing
-                        if (isShuttingDown || Thread.currentThread().isInterrupted()) {
+                        if (isShuttingDown.get() || Thread.currentThread().isInterrupted()) {
                             log.warn("Pipeline shutting down. Aborting parallel block processing.");
                             return;
                         }
@@ -430,7 +440,7 @@ public class PipelineOrchestrator {
      */
     @PreDestroy
     public void shutdown() {
-        this.isShuttingDown = true;
+        this.isShuttingDown.set(true);
         log.info("PipelineOrchestrator: Shutdown signal received.");
         
         // Shutdown TransactionPipe to clear pending transactions
