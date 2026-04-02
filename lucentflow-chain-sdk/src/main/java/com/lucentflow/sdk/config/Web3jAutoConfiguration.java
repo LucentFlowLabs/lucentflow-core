@@ -196,8 +196,10 @@ public class Web3jAutoConfiguration {
         RpcProviderType type = RpcProviderType.fromRpcUrl(properties.getRpcUrl());
         // Alchemy / QuickNode / Infura / BlastAPI: conservative free-tier throttling.
         return switch (type) {
-            // Professional endpoints: prioritize continuity over burst throughput.
-            case PROFESSIONAL -> new RpcProviderConfig(type, 15, 100, 500L);
+            // Professional endpoints: 8 permits is the Alchemy Free-Tier sweet spot
+            // (330 CUPS budget / ~40 CUPS per block = safe ceiling for sustained syncs).
+            // 2000ms inter-batch delay ensures the rate-limit bucket fully resets between chunks.
+            case PROFESSIONAL -> new RpcProviderConfig(type, 8, 100, 2000L);
             case PUBLIC -> new RpcProviderConfig(type, 2, 50, 3000L);
         };
     }

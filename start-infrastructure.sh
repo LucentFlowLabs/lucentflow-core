@@ -2,13 +2,16 @@
 
 # LucentFlow Infrastructure Startup Script
 # This script starts PostgreSQL, pgAdmin, and Metabase services
+#
+# @author ArchLucent
+# @since 1.0
 
 set -e
 
 # Get the absolute path of the directory where this script is located
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT="$SCRIPT_DIR"
-DEPLOY_DIR="$PROJECT_ROOT/lucentflow-deployment/docker"
+DEPLOY_DIR="$(cd "$PROJECT_ROOT/lucentflow-deployment/docker" && pwd)"
 API_DIR="$PROJECT_ROOT/lucentflow-api"
 
 echo "🚀 Starting LucentFlow Infrastructure..."
@@ -48,6 +51,8 @@ if [ ! -f "$DEPLOY_DIR/.env" ]; then
         echo "❌ .env.example file not found!"
         exit 1
     fi
+else
+    echo "[CONF] .env already exists in $DEPLOY_DIR. Skipping template copy."
 fi
 
 # Load environment variables from .env file
@@ -132,9 +137,9 @@ echo "   mvn spring-boot:run"
 echo ""
 echo "📦 JAR Execution (Alternative):"
 if [ -n "$JAVA_PROXY_ARGS" ]; then
-    echo "   java $JAVA_PROXY_ARGS -jar target/lucentflow-api.jar"
+    echo "   java $JAVA_PROXY_ARGS -jar lucentflow-api/target/lucentflow-api.jar"
 else
-    echo "   java -jar target/lucentflow-api.jar"
+    echo "   java -jar lucentflow-api/target/lucentflow-api.jar"
 fi
 echo ""
 echo "�📖 API Documentation will be available at:"

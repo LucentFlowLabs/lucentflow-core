@@ -12,7 +12,7 @@
     
     <groupId>com.lucentflow</groupId>
     <artifactId>lucentflow-parent</artifactId>
-    <version>1.0.1-SNAPSHOT</version>
+    <version>1.0.1-RELEASE</version>
     <packaging>pom</packaging>
 
     <properties>

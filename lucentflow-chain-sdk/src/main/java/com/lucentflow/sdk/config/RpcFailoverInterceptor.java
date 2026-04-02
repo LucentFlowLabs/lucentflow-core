@@ -9,7 +9,11 @@ import java.io.IOException;
 
 /**
  * Rewrites JSON-RPC requests to {@link RpcEndpointState#currentRpcUrl()} and triggers backup failover
- * on HTTP 4xx/5xx or I/O failures (timeouts, connection resets).
+ * on HTTP failures or I/O failures (timeouts, connection resets).
+ *
+ * <p>IMPORTANT: HTTP 429 (rate limit) is not a "broken" endpoint. Switching to backup on 429
+ * causes immediate flapping and defeats adaptive backpressure. 429 must be handled by
+ * higher-layer cooldown logic (governor + scheduler pacing).</p>
  *
  * @author ArchLucent
  * @since 1.0
@@ -30,6 +34,10 @@ public class RpcFailoverInterceptor implements Interceptor {
             Response response = chain.proceed(request);
             if (!response.isSuccessful()) {
                 int code = response.code();
+                // Do NOT failover on 429. This is a rate limit signal, not an endpoint outage.
+                if (code == 429) {
+                    return response;
+                }
                 if (code >= 400) {
                     response.close();
                     endpointState.activateFailoverToBackup();

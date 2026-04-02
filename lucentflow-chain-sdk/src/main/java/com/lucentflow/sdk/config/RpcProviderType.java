@@ -34,6 +34,7 @@ public enum RpcProviderType {
             case String s when s.contains("quicknode") -> PROFESSIONAL;
             case String s when s.contains("infura") -> PROFESSIONAL;
             case String s when s.contains("blastapi") -> PROFESSIONAL;
+            case String s when s.contains("ankr") -> PROFESSIONAL;
             default -> PUBLIC;
         };
     }

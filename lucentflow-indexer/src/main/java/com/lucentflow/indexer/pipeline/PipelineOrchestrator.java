@@ -1,6 +1,7 @@
 package com.lucentflow.indexer.pipeline;
 
 import com.lucentflow.common.pipeline.TransactionPipe;
+import com.lucentflow.indexer.control.AdaptiveBackpressureController;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
@@ -15,12 +16,12 @@ import org.web3j.protocol.core.methods.response.EthBlock;
 
 import jakarta.annotation.PreDestroy;
 import java.time.Instant;
-import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
+import org.springframework.beans.factory.annotation.Value;
 
 /**
  * High-throughput blockchain indexing pipeline orchestrator with zero-loss guarantees.
@@ -46,8 +47,7 @@ public class PipelineOrchestrator {
     private final TransactionPipe transactionPipe;
     private final JdbcTemplate jdbcTemplate;
     private final RpcConcurrencyGovernor rpcConcurrencyGovernor;
-    private final Random random = new Random();
-
+    private final AdaptiveBackpressureController backpressureController;
     /** Samples for approximate blocks/sec between heartbeats. */
     private final AtomicLong heartbeatSampleHead = new AtomicLong(-1L);
     private final AtomicLong heartbeatSampleNanos = new AtomicLong(0L);
@@ -75,14 +75,18 @@ public class PipelineOrchestrator {
                                 TransactionPipe transactionPipe,
                                 RpcProviderConfig rpcProviderConfig,
                                 JdbcTemplate jdbcTemplate,
-                                RpcConcurrencyGovernor rpcConcurrencyGovernor) {
+                                RpcConcurrencyGovernor rpcConcurrencyGovernor,
+                                AdaptiveBackpressureController backpressureController,
+                                @Value("${lucentflow.indexer.max-batch-size:200}") long maxBatchSize) {
         this.blockSource = blockSource;
         this.whaleDatabaseSink = whaleDatabaseSink;
         this.syncStatusRepository = syncStatusRepository;
         this.transactionPipe = transactionPipe;
         this.jdbcTemplate = jdbcTemplate;
         this.rpcConcurrencyGovernor = rpcConcurrencyGovernor;
-        this.pipelineChunkSize = rpcProviderConfig.recommendedPipelineChunkSize();
+        this.backpressureController = backpressureController;
+        // Use the smaller of provider-optimized chunk size and user-defined max-batch-size.
+        this.pipelineChunkSize = Math.max(1L, Math.min(rpcProviderConfig.recommendedPipelineChunkSize(), maxBatchSize));
         this.interBatchSleepMillis = rpcProviderConfig.interBatchSleepMillis();
     }
     
@@ -95,13 +99,19 @@ public class PipelineOrchestrator {
      * 
      * @throws RuntimeException if critical pipeline components fail
      */
-    @Scheduled(fixedDelay = 2000)
+    @Scheduled(fixedDelayString = "${lucentflow.indexer.polling-interval-ms:2000}")
     public void scanForNewBlocks() {
         if (!scanLock.tryLock()) {
             log.debug("scanForNewBlocks skipped: previous execution still running");
             return;
         }
         try {
+            if (!backpressureController.allowScanNow()) {
+                log.debug("[BACKPRESSURE] Skipping scheduler tick (cooldown pacing)");
+                return;
+            }
+            backpressureController.markScanStarted();
+
             if (!blockSource.hasNewBlocks()) {
                 log.debug("No new blocks to process");
                 return;
@@ -136,10 +146,17 @@ public class PipelineOrchestrator {
                     break;
                 }
                 
+                boolean chunkSucceeded;
                 if (blocksInChunk > PARALLEL_PROCESSING_THRESHOLD) {
-                    processBlocksParallel(chunkStart, chunkEnd);
+                    chunkSucceeded = processBlocksParallel(chunkStart, chunkEnd);
                 } else {
-                    processBlocksSequential(chunkStart, chunkEnd);
+                    chunkSucceeded = processBlocksSequential(chunkStart, chunkEnd);
+                }
+
+                // CRITICAL: Never advance checkpoint if any block failed.
+                if (!chunkSucceeded) {
+                    log.warn("[RESILIENCE] Chunk {}–{} had failures. Progress will NOT advance; retry next tick.", chunkStart, chunkEnd);
+                    break;
                 }
                 
                 // CHECKPOINT: persist progress using ID 1 Protocol after each chunk.
@@ -162,7 +179,9 @@ public class PipelineOrchestrator {
                         Thread.sleep(sleepMillis);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
-                        log.warn("Pipeline orchestrator interrupted during inter-batch delay");
+                        if (!isShuttingDown.get()) {
+                            log.warn("Pipeline orchestrator interrupted during inter-batch delay");
+                        }
                         break;
                     }
                 }
@@ -173,11 +192,12 @@ public class PipelineOrchestrator {
             log.debug("Completed processing up to block {}", endBlock);
             
         } catch (Exception e) {
-            // Filter shutdown noise - don't log full stack trace during graceful shutdown
-            if (!(e instanceof InterruptedException)) {
+            if (e instanceof InterruptedException && isShuttingDown.get()) {
+                // Expected interrupt during graceful shutdown — suppress entirely.
+            } else if (!(e instanceof InterruptedException)) {
                 log.error("Error in pipeline orchestrator", e);
             } else {
-                log.warn("Pipeline orchestrator interrupted during shutdown: {}", e.getMessage());
+                log.warn("Pipeline orchestrator interrupted: {}", e.getMessage());
             }
         } finally {
             scanLock.unlock();
@@ -194,16 +214,16 @@ public class PipelineOrchestrator {
      * @param endBlock Ending block number (inclusive)
      * @throws RuntimeException if individual block processing fails
      */
-    private void processBlocksSequential(long startBlock, long endBlock) {
+    private boolean processBlocksSequential(long startBlock, long endBlock) {
         for (long blockNum = startBlock; blockNum <= endBlock; blockNum++) {
-            try {
-                processBlock(blockNum);
-            } catch (Exception e) {
-                if (!(e instanceof InterruptedException)) {
-                    log.warn("Failed to process block {} sequentially (transient)", blockNum, e.getMessage());
-                }
+            if (Thread.currentThread().isInterrupted() || isShuttingDown.get()) {
+                return false;
+            }
+            if (!processBlock(blockNum)) {
+                return false;
             }
         }
+        return true;
     }
     
     /**
@@ -217,64 +237,85 @@ public class PipelineOrchestrator {
      * @param endBlock Ending block number (inclusive)
      * @throws InterruptedException if thread interruption occurs during processing
      */
-    private void processBlocksParallel(long startBlock, long endBlock) {
-        log.debug("Processing {} blocks in parallel: {} to {}", 
+    private boolean processBlocksParallel(long startBlock, long endBlock) {
+        log.debug("Processing {} blocks in parallel: {} to {}",
                    endBlock - startBlock + 1, startBlock, endBlock);
-        
-        @SuppressWarnings("unchecked")
-        java.util.concurrent.CompletableFuture<Void>[] futures = 
-                (java.util.concurrent.CompletableFuture<Void>[]) new java.util.concurrent.CompletableFuture<?>[(int) (endBlock - startBlock + 1)];
-        
+
+        // Use a List to avoid null entries in the futures array.
+        // Pre-allocating with a raw array is dangerous: early breaks (shutdown / RejectedExecution)
+        // leave trailing null slots that cause allOf() to throw NullPointerException.
+        java.util.List<java.util.concurrent.CompletableFuture<Boolean>> futureList =
+                new java.util.ArrayList<>((int) (endBlock - startBlock + 1));
+
         for (long blockNum = startBlock; blockNum <= endBlock; blockNum++) {
             final long currentBlock = blockNum;
-            
-            // Check for thread interruption before submitting tasks
+
             if (Thread.currentThread().isInterrupted()) {
                 log.info("Block processing interrupted, stopping submission of remaining tasks");
-                return;
+                break;
             }
-            
-            // Add jitter between batches to avoid Thundering Herd
+
+            // Jitter between submissions to avoid Thundering Herd.
+            // ThreadLocalRandom is VT-safe and statistically unbiased under concurrent access.
             if (blockNum > startBlock) {
                 try {
-                    int jitterMs = 10 + random.nextInt(41); // 10-50ms random delay
+                    int jitterMs = 10 + java.util.concurrent.ThreadLocalRandom.current().nextInt(41);
                     Thread.sleep(jitterMs);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    return;
+                    break;
                 }
             }
-            
+
             try {
-                futures[(int) (blockNum - startBlock)] = java.util.concurrent.CompletableFuture.runAsync(() -> {
+                java.util.concurrent.CompletableFuture<Boolean> f =
+                        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
                     try {
-                        // Check for interruption inside the async task
                         if (Thread.currentThread().isInterrupted()) {
                             log.debug("Async task interrupted for block {}", currentBlock);
-                            return;
+                            return false;
                         }
-                        
-                        // Check shutdown flag before processing
-                        if (isShuttingDown.get() || Thread.currentThread().isInterrupted()) {
-                            log.warn("Pipeline shutting down. Aborting parallel block processing.");
-                            return;
+                        if (isShuttingDown.get()) {
+                            log.debug("Pipeline shutting down. Skipping block {}.", currentBlock);
+                            return false;
                         }
-                        
-                        processBlock(currentBlock);
+                        return processBlock(currentBlock);
                     } catch (Exception e) {
                         if (!(e instanceof InterruptedException)) {
-                            log.warn("Failed to process block {} in parallel (transient)", currentBlock, e.getMessage());
+                            log.warn("Failed to process block {} in parallel (transient): {}",
+                                    currentBlock, e.getMessage());
                         }
+                        return false;
                     }
                 }, pipelineExecutor);
+                futureList.add(f);
             } catch (java.util.concurrent.RejectedExecutionException e) {
-                log.warn("Shutdown in progress - rejected task for block {}: {}", currentBlock, e.getMessage());
-                break; // Stop submitting more tasks
+                log.warn("Shutdown in progress — rejected task for block {}: {}", currentBlock, e.getMessage());
+                break;
             }
         }
-        
-        // Wait for all parallel processing to complete
-        java.util.concurrent.CompletableFuture.allOf(futures).join();
+
+        if (!futureList.isEmpty()) {
+            // filter(nonNull) is a defensive belt-and-suspenders guard; the List approach already
+            // guarantees no nulls, but we keep it to satisfy the contract regardless of future refactors.
+            java.util.concurrent.CompletableFuture.allOf(
+                    futureList.stream()
+                              .filter(java.util.Objects::nonNull)
+                              .toArray(java.util.concurrent.CompletableFuture[]::new)
+            ).join();
+        }
+
+        for (java.util.concurrent.CompletableFuture<Boolean> f : futureList) {
+            if (f == null) continue;
+            try {
+                if (!Boolean.TRUE.equals(f.join())) {
+                    return false;
+                }
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return true;
     }
     
     /**
@@ -286,13 +327,13 @@ public class PipelineOrchestrator {
      * @param blockNumber Block number to process
      * @throws RuntimeException if block fetching, transformation, or persistence fails
      */
-    private void processBlock(long blockNumber) {
+    private boolean processBlock(long blockNumber) {
         try {
             // SOURCE: Fetch block
             EthBlock.Block block = blockSource.fetchBlock(blockNumber);
             if (block == null) {
-                log.warn("[SOFT-FAIL] Block {} fetch returned null (timeout, interrupt, or shutdown); skipping", blockNumber);
-                return;
+                log.warn("[SOFT-FAIL] Block {} fetch returned null (timeout, rate-limit, interrupt, or shutdown); will retry later", blockNumber);
+                return false;
             }
             var transactions = blockSource.getTransactionsFromBlock(block);
             
@@ -300,13 +341,17 @@ public class PipelineOrchestrator {
             
             // BaseBlockSource pushes whale transactions to TransactionPipe.
             // Pipeline processing of those transactions happens asynchronously downstream.
+            return true;
         } catch (Exception e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
-                log.warn("[SOFT-INTERRUPT] Block {} processing interrupted; skipping without crashing pipeline", blockNumber);
+                if (!isShuttingDown.get()) {
+                    log.warn("[SOFT-INTERRUPT] Block {} processing interrupted; will retry later", blockNumber);
+                }
             } else {
-                log.warn("[RESILIENCE] Block {} failed after retries and was skipped: {}", blockNumber, e.getMessage());
+                log.warn("[RESILIENCE] Block {} failed: {}", blockNumber, e.getMessage());
             }
+            return false;
         }
     }
     

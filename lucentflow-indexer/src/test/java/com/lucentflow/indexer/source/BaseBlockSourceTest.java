@@ -2,6 +2,7 @@ package com.lucentflow.indexer.source;
 
 import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
+import com.lucentflow.indexer.control.AdaptiveBackpressureController;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.sdk.config.RpcProviderConfig;
@@ -79,6 +80,11 @@ class BaseBlockSourceTest {
     private EthBlock mockEthBlock;
     
     private BaseBlockSource baseBlockSource;
+
+    private static AdaptiveBackpressureController controller() {
+        // basePolling=2000, baseMaxBatch=200, cooldownWindow=30000, cooldownPolling=10000, cooldownBatch=20
+        return new AdaptiveBackpressureController(2000L, 200L, 30_000L, 10_000L, 20L);
+    }
     
     @BeforeEach
     void setUp() {
@@ -87,9 +93,9 @@ class BaseBlockSourceTest {
         when(flywayProvider.getIfAvailable()).thenReturn(null);
 
         RpcProviderConfig rpcProviderConfig = new RpcProviderConfig(RpcProviderType.PUBLIC, 2, 50, 3000L);
-        RpcConcurrencyGovernor rpcConcurrencyGovernor = new RpcConcurrencyGovernor(rpcProviderConfig);
+        RpcConcurrencyGovernor rpcConcurrencyGovernor = new RpcConcurrencyGovernor(2, controller(), true);
         baseBlockSource = new BaseBlockSource(web3j, syncStatusRepository, transactionPipe, rpcProviderConfig,
-                rpcConcurrencyGovernor, flywayProvider);
+                rpcConcurrencyGovernor, controller(), flywayProvider);
     }
 
     /** ID=1 protocol: checkpoint row used by {@code initializeLastScannedBlock} / {@code resolveStartBlock}. */
@@ -171,7 +177,8 @@ class BaseBlockSourceTest {
         // Then
         assertThat(blockRange).hasSize(2);
         assertThat(blockRange[0]).isEqualTo(999951); // First unscanned block
-        assertThat(blockRange[1]).isEqualTo(1000000); // Current block
+        // Range is capped by max-batch-size, but must never exceed current chain head.
+        assertThat(blockRange[1]).isEqualTo(1000000L);
         verify(web3j, times(1)).ethBlockNumber(); // Called once for range
         verify(syncStatusRepository, atLeastOnce()).findById(1L);
     }
@@ -230,8 +237,8 @@ class BaseBlockSourceTest {
     }
     
     @Test
-    @DisplayName("Should throw exception when block fetch fails after retries")
-    void shouldThrowExceptionWhenBlockFetchFailsAfterRetries() throws Exception {
+    @DisplayName("Should soft-fail (return null) when rate-limited after retries")
+    void shouldSoftFailWhenBlockFetchIsRateLimitedAfterRetries() throws Exception {
         // Given
         BigInteger blockNumber = BigInteger.valueOf(123456);
         
@@ -244,8 +251,9 @@ class BaseBlockSourceTest {
             .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"))
             .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"));
 
-        // Failures surface from CompletableFuture.get(); outer Retry may not re-invoke ethGetBlockByNumber 5x
-        assertThrows(RuntimeException.class, () -> baseBlockSource.fetchBlock(blockNumber.longValue()));
+        // Rate-limit is treated as a soft failure: BaseBlockSource returns null so orchestrator can hold position.
+        EthBlock.Block block = baseBlockSource.fetchBlock(blockNumber.longValue());
+        assertThat(block).isNull();
         verify(web3j, atLeastOnce()).ethGetBlockByNumber(any(), anyBoolean());
         verify(mockBlockRequest, atLeastOnce()).send();
     }

@@ -56,6 +56,14 @@ public interface WhaleTransactionRepository extends JpaRepository<WhaleTransacti
     long countByBytecodeHashSince(@Param("bytecodeHash") String bytecodeHash, @Param("since") Instant since);
     
     /**
+     * Returns the single transaction with the highest ETH value using an indexed ORDER BY LIMIT 1.
+     * Replaces the previous anti-pattern of {@code findAll().stream().max(...)}.
+     *
+     * @return Optional containing the highest-value whale transaction, empty if table is empty
+     */
+    Optional<WhaleTransaction> findTopByOrderByValueEthDesc();
+
+    /**
      * Check if whale transaction exists by hash (optimized for batch operations)
      * @param hash Transaction hash
      * @return true if exists, false otherwise

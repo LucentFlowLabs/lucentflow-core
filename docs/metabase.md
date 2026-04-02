@@ -6,7 +6,7 @@
 # LucentFlow BI Intelligence: Metabase SQL Specification
 This document serves as the Source of Truth for the LucentFlow monitoring dashboards. It defines the SQL logic used to transform raw Base chain transaction data into actionable security intelligence.
 
-**Schema alignment (v1.1.0-SNAPSHOT):** The `whale_transactions` table exposes analyzer outputs including `risk_score`, `risk_reasons`, `rug_risk_level`, `execution_status` (`SUCCESS` | `REVERTED`), and genesis fields `funding_source_address` / `funding_source_tag`. The `sync_status` table (ID 1 Protocol) exposes heartbeat metrics including `chain_head_block`, `last_scanned_block`, `block_lag`, and `blocks_per_second`.
+**Schema alignment (v1.1.0-RELEASE):** The `whale_transactions` table exposes analyzer outputs including `risk_score`, `risk_reasons`, `rug_risk_level`, `execution_status` (`SUCCESS` | `REVERTED`), and genesis fields `funding_source_address` / `funding_source_tag`. The `sync_status` table (ID 1 Protocol) exposes heartbeat metrics including `chain_head_block`, `last_scanned_block`, `block_lag`, and `blocks_per_second`.
 
 ## 📊 Dashboard Overview
 The LucentFlow command center is divided into four critical analytical dimensions:

@@ -184,3 +184,11 @@ java -jar lucentflow-api/target/lucentflow-api.jar
 ---
 
 **LucentFlow v1.0.0-RELEASE - Production-ready DeFi infrastructure built for the future** 🚀
+
+## v1.1.0-RELEASE (2026-04-01)
+
+[Engine] Fully optimized for Java 21 Virtual Threads (Removed all synchronized pinning).
+[Forensics] Genesis Trace 2.0: Recursive funding source tracing with PostgreSQL 16 CTE.
+[Security] Anti-Rug 2.0: Heuristic risk scoring engine and bytecode fingerprinting.
+[Stability] Introduced Caffeine bounded caches and RpcConcurrencyGovernor for Alchemy Free Tier.
+[Alerting] Real-time Telegram Bot integration with fail-safe logic.

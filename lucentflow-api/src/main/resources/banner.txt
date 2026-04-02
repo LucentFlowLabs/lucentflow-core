@@ -5,6 +5,6 @@ ${AnsiColor.BRIGHT_BLUE}
  | |___| |_| | (_|  __/ | | | |_| | | |_|  _| | | (_) \ V  V / 
  |_____|\__,_|\___\___|_| |_|\__,_|  \__|_|   |_|\___/ \_/\_/  
 ${AnsiColor.BRIGHT_CYAN}
- >>> ASSET SECURITY & FORENSIC SENTINEL | v1.1.0-SNAPSHOT
+ >>> ASSET SECURITY & FORENSIC SENTINEL | v1.1.0-RELEASE
  >>> Powered by Java 21 Virtual Threads & TCV Logic
 ${AnsiColor.DEFAULT}

@@ -4,13 +4,13 @@
   @since 1.0
 -->
 
-# LucentFlow Core (v1.1.1-SNAPSHOT)
+# LucentFlow Core (v1.1.0-RELEASE)
 
 ![Java 21](https://img.shields.io/badge/Java-21-orange?style=flat&logo=java)
 ![Spring Boot 3.4](https://img.shields.io/badge/Spring%20Boot-3.4-brightgreen?style=flat&logo=spring-boot)
 ![Base L2](https://img.shields.io/badge/Base-L2-blue?style=flat)
 ![Docker Ready](https://img.shields.io/badge/Docker-Ready-blue?style=flat&logo=docker)
-![Version](https://img.shields.io/badge/Version-1.1.1--SNAPSHOT-blue?style=flat)
+![Version](https://img.shields.io/badge/Version-1.1.0--RELEASE-blue?style=flat)
 
 
 

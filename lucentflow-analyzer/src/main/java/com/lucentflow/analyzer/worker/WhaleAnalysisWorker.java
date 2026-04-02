@@ -31,6 +31,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
@@ -78,10 +79,28 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private Semaphore dbSaveSemaphore = new Semaphore(2);
 
     private static final int BATCH_SIZE = 100;
-    private static final int CONCURRENCY = 10; // Number of parallel virtual thread workers
+    private static final int CONCURRENCY = 10;
 
     private static final long CATCH_UP_LAG_THRESHOLD_BLOCKS = 500L;
     private static final int CATCH_UP_TRACE_MIN_RISK_SCORE = 60;
+
+    /**
+     * TTL for the risk-factor memo caches below (milliseconds).
+     * A 15-second window covers multiple batch cycles while keeping counts fresh enough
+     * for the 10-minute / 7-day query windows used by risk heuristics.
+     */
+    private static final long RISK_MEMO_TTL_MS = 15_000L;
+
+    /**
+     * Short-lived memo caches that prevent N×2 per-transaction DB COUNT queries.
+     *
+     * <p>Pattern: {@code ConcurrentHashMap<key, long[]{count, expiryEpochMs}>}.
+     * {@link ConcurrentHashMap#computeIfAbsent} guarantees a single DB call per unique key
+     * even when multiple Virtual Thread workers race for the same address/hash simultaneously.
+     * Entries are considered stale after {@link #RISK_MEMO_TTL_MS} and will be re-queried lazily.</p>
+     */
+    private final ConcurrentHashMap<String, long[]> deployerCountMemo = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, long[]> bytecodeCountMemo = new ConcurrentHashMap<>();
 
     @Override
     public void run(String... args) {
@@ -560,15 +579,25 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
 
     /**
      * Prior persisted rows with the same creation bytecode hash in the last 7 days (clone detector).
+     *
+     * <p>Results are memoized for {@link #RISK_MEMO_TTL_MS} ms so that multiple transactions
+     * sharing the same bytecode fingerprint within a batch window only trigger one DB COUNT.</p>
      */
     private int countIdenticalBytecodeDeployments(String bytecodeHash) {
         if (bytecodeHash == null || bytecodeHash.isBlank()) {
             return 0;
         }
+        long now = System.currentTimeMillis();
+        long[] cached = bytecodeCountMemo.get(bytecodeHash);
+        if (cached != null && cached[1] > now) {
+            return (int) cached[0];
+        }
         try {
             Instant since = Instant.now().minus(7, ChronoUnit.DAYS);
             long n = whaleTransactionRepository.countByBytecodeHashSince(bytecodeHash, since);
-            return n > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) n;
+            int result = n > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) n;
+            bytecodeCountMemo.put(bytecodeHash, new long[]{result, now + RISK_MEMO_TTL_MS});
+            return result;
         } catch (Exception e) {
             log.debug("[BYTECODE-FP] countByBytecodeHashSince failed for {}: {}", bytecodeHash, e.getMessage());
             return 0;
@@ -578,15 +607,25 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     /**
      * Serial deployer signal: persisted contract creations from this initiator in the last 10 minutes.
      * Current tx is usually not persisted yet; cross-batch factory behavior still surfaces here.
+     *
+     * <p>Results are memoized for {@link #RISK_MEMO_TTL_MS} ms — a factory deploying N contracts
+     * per batch triggers exactly one COUNT query regardless of N.</p>
      */
     private int countRecentDeploymentsForInitiator(String fromAddress) {
         if (fromAddress == null || fromAddress.isBlank()) {
             return 0;
         }
+        long now = System.currentTimeMillis();
+        long[] cached = deployerCountMemo.get(fromAddress);
+        if (cached != null && cached[1] > now) {
+            return (int) cached[0];
+        }
         try {
             Instant since = Instant.now().minus(10, ChronoUnit.MINUTES);
             long n = whaleTransactionRepository.countRecentDeployments(fromAddress, since);
-            return n > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) n;
+            int result = n > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) n;
+            deployerCountMemo.put(fromAddress, new long[]{result, now + RISK_MEMO_TTL_MS});
+            return result;
         } catch (Exception e) {
             log.warn("[SERIAL-DEPLOYER] countRecentDeployments failed for {}: {}", fromAddress, e.getMessage());
             return 0;

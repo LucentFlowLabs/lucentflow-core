@@ -3,10 +3,13 @@ package com.lucentflow.indexer.source;
 import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.common.utils.Erc20Decoder;
+import com.lucentflow.indexer.control.AdaptiveBackpressureController;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
+import com.lucentflow.indexer.exception.RateLimitException;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.sdk.config.RpcProviderConfig;
 import lombok.extern.slf4j.Slf4j;
+import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.web3j.protocol.Web3j;
@@ -16,6 +19,7 @@ import org.web3j.protocol.core.methods.response.EthBlockNumber;
 import org.web3j.protocol.core.methods.response.EthGetTransactionReceipt;
 import org.web3j.protocol.core.methods.response.Transaction;
 import org.web3j.protocol.core.methods.response.TransactionReceipt;
+import org.web3j.exceptions.MessageDecodingException;
 
 import java.math.BigInteger;
 import java.util.List;
@@ -23,6 +27,7 @@ import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.context.event.EventListener;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.beans.factory.ObjectProvider;
@@ -32,6 +37,7 @@ import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.core.functions.CheckedSupplier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import org.springframework.beans.factory.annotation.Value;
 
 /**
  * Source component for blockchain data extraction with zero-loss pipeline integration.
@@ -54,7 +60,9 @@ public class BaseBlockSource {
     
     // Virtual Thread Executor for non-blocking Async RPC calls
     private final ExecutorService rpcExecutor = Executors.newVirtualThreadPerTaskExecutor();
-    
+
+    // Legacy circuit breaker is replaced by RpcConcurrencyGovernor COOLING_DOWN state.
+
     // Whale threshold constant for efficiency
     private static final BigInteger WHALE_THRESHOLD = com.lucentflow.common.utils.EthUnitConverter.etherStringToWei("10");
 
@@ -70,11 +78,13 @@ public class BaseBlockSource {
                            TransactionPipe transactionPipe,
                            RpcProviderConfig rpcProviderConfig,
                            RpcConcurrencyGovernor rpcConcurrencyGovernor,
+                           AdaptiveBackpressureController backpressureController,
                            ObjectProvider<org.flywaydb.core.Flyway> flywayProvider) {
         this.web3j = web3j;
         this.syncStatusRepository = syncStatusRepository;
         this.transactionPipe = transactionPipe;
         this.rpcConcurrencyGovernor = rpcConcurrencyGovernor;
+        this.backpressureController = backpressureController;
         int permits = rpcProviderConfig.recommendedRpcSemaphorePermits();
         // Timeout calibration: professional endpoints should fail fast and retry.
         int timeoutSeconds = switch (rpcProviderConfig.providerType()) {
@@ -103,12 +113,14 @@ public class BaseBlockSource {
             .maxAttempts(5)
             .retryExceptions(
                 org.web3j.protocol.exceptions.ClientConnectionException.class,
+                com.lucentflow.indexer.exception.RateLimitException.class,
+                MessageDecodingException.class,
                 java.net.SocketTimeoutException.class,
                 java.net.ConnectException.class
             )
             .intervalFunction(
                 // Exponential backoff with randomization (jitter) to avoid synchronized retries.
-                io.github.resilience4j.core.IntervalFunction.ofExponentialRandomBackoff(5_000L, 2.0, 0.2, 60_000L)
+                io.github.resilience4j.core.IntervalFunction.ofExponentialRandomBackoff(1_000L, 2.0, 0.2, 60_000L)
             )
             .build());
     }
@@ -116,6 +128,15 @@ public class BaseBlockSource {
     
     @org.springframework.beans.factory.annotation.Value("${lucentflow.indexer.start-block:#{null}}")
     private Long configuredStartBlock;
+
+    @Value("${lucentflow.indexer.max-batch-size:200}")
+    private long maxBatchSize;
+
+    private final AdaptiveBackpressureController backpressureController;
+
+    // Prevent provider glitch logs from flooding when the endpoint continuously returns non-standard payloads.
+    private final AtomicLong lastDecodeGlitchWarnAtMs = new AtomicLong(0L);
+    private final AtomicLong lastEmptyBlockWarnAtMs = new AtomicLong(0L);
 
     // Shared across scheduler executions; ensure visibility across threads.
     private volatile Long lastScannedBlock;
@@ -126,6 +147,27 @@ public class BaseBlockSource {
     public void onApplicationReady() {
         // Warm-up: trigger thread-safe lazy initialization.
         getLastScannedBlock();
+    }
+
+    /**
+     * Shuts down the RPC executor gracefully on Spring context destruction.
+     * Without this, in-flight Virtual Thread RPC tasks would prevent JVM from exiting cleanly
+     * and could race against {@link com.lucentflow.indexer.config.Web3jShutdownConfig#onDestroy()}.
+     */
+    @PreDestroy
+    public void shutdownRpcExecutor() {
+        log.info("[BASE-BLOCK-SOURCE] Shutting down rpcExecutor...");
+        rpcExecutor.shutdown();
+        try {
+            if (!rpcExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                rpcExecutor.shutdownNow();
+                log.warn("[BASE-BLOCK-SOURCE] rpcExecutor did not terminate in 5s — forced shutdown.");
+            }
+        } catch (InterruptedException ie) {
+            rpcExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        log.info("[BASE-BLOCK-SOURCE] rpcExecutor shutdown complete.");
     }
     
     public void initializeLastScannedBlock() {
@@ -205,9 +247,45 @@ public class BaseBlockSource {
         try {
             return blockNumberSupplier.get();
         } catch (Throwable e) {
-            log.error("Failed to get latest block number after 5 retries", e);
-            throw new RuntimeException("Failed to fetch latest block", e);
+            // Ankr/QuickNode can occasionally return non-standard payloads that web3j can't decode.
+            // For stability: treat as soft-failure and hold position (return last scanned block),
+            // so orchestrator won't advance checkpoints.
+            if (is429Error(e)) {
+                long now = System.currentTimeMillis();
+                if (now - lastDecodeGlitchWarnAtMs.get() > 10_000L) {
+                    lastDecodeGlitchWarnAtMs.set(now);
+                    log.warn("429 while fetching latest block number. Holding position and retrying later.");
+                }
+                rpcConcurrencyGovernor.onRateLimitExceeded();
+                return getLastScannedBlock();
+            }
+            if (isTransientDecodeGlitch(e)) {
+                long now = System.currentTimeMillis();
+                if (now - lastDecodeGlitchWarnAtMs.get() > 10_000L) {
+                    lastDecodeGlitchWarnAtMs.set(now);
+                    log.warn("Failed to decode latest block number (provider payload glitch). Holding position and retrying later: {}",
+                            e.getMessage());
+                }
+                return getLastScannedBlock();
+            }
+
+            long now = System.currentTimeMillis();
+            if (now - lastDecodeGlitchWarnAtMs.get() > 10_000L) {
+                lastDecodeGlitchWarnAtMs.set(now);
+                log.warn("Failed to get latest block number after retries. Holding position: {}", e.getMessage());
+            }
+            return getLastScannedBlock();
         }
+    }
+
+    private static boolean isTransientDecodeGlitch(Throwable t) {
+        if (t == null) return false;
+        for (Throwable x = t; x != null; x = x.getCause()) {
+            if (x instanceof MessageDecodingException) return true;
+            // Defensive: sometimes wrapped/stripped with class name only.
+            if ("org.web3j.exceptions.MessageDecodingException".equals(x.getClass().getName())) return true;
+        }
+        return false;
     }
     
     /**
@@ -240,6 +318,22 @@ public class BaseBlockSource {
     }
     
     /**
+     * Returns true if any exception in the cause chain signals an HTTP 429 (Too Many Requests).
+     * Walks up to 10 levels deep to handle wrapped exceptions from OkHttp / Web3j.
+     */
+    private static boolean is429Error(Throwable t) {
+        int depth = 0;
+        while (t != null && depth++ < 10) {
+            String msg = t.getMessage();
+            if (msg != null && (msg.contains("429") || msg.toLowerCase().contains("too many requests"))) {
+                return true;
+            }
+            t = t.getCause();
+        }
+        return false;
+    }
+
+    /**
      * Fetch a specific block from the blockchain with retry logic and hard timeout.
      * CRITICAL: Null return means missing potential whale movements - must be logged appropriately.
      * @param blockNumber Block number to fetch
@@ -256,14 +350,14 @@ public class BaseBlockSource {
                     CompletableFuture<EthBlock> future = CompletableFuture.supplyAsync(() -> {
                         try {
                             return web3j.ethGetBlockByNumber(
-                                DefaultBlockParameter.valueOf(BigInteger.valueOf(blockNumber)), 
+                                DefaultBlockParameter.valueOf(BigInteger.valueOf(blockNumber)),
                                 true
                             ).send();
                         } catch (Exception e) {
                             throw new RuntimeException("RPC call failed", e);
                         }
                     }, rpcExecutor);
-                    
+
                     // Apply hard timeout based on provider tier
                     EthBlock block = future.orTimeout(rpcBlockTimeoutSeconds, TimeUnit.SECONDS).get();
                     if (block == null || block.getBlock() == null) {
@@ -275,23 +369,54 @@ public class BaseBlockSource {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                log.warn("[SOFT-INTERRUPT] Block {} fetch interrupted; returning null for orchestrator soft-fail", blockNumber);
+                if (!rpcExecutor.isShutdown()) {
+                    log.warn("[SOFT-INTERRUPT] Block {} fetch interrupted; returning null for orchestrator soft-fail", blockNumber);
+                }
                 return null;
             } catch (java.util.concurrent.RejectedExecutionException e) {
-                log.warn("Shutdown in progress - rejected task for block {}: {}", blockNumber, e.getMessage());
+                log.warn("Shutdown in progress — rejected task for block {}: {}", blockNumber, e.getMessage());
                 return null;
             } catch (Exception e) {
-                throw e; // Let Resilience4j handle the retry
+                if (is429Error(e) && (e instanceof org.web3j.protocol.exceptions.ClientConnectionException || e.getCause() instanceof org.web3j.protocol.exceptions.ClientConnectionException)) {
+                    rpcConcurrencyGovernor.onRateLimitExceeded();
+                    throw new RateLimitException("RPC rate limit exceeded (429) while fetching block " + blockNumber, e);
+                }
+                throw e;
             }
         });
-        
+
         try {
             return blockSupplier.get();
         } catch (Throwable e) {
-            log.error("Failed to fetch block {} after 5 retries", blockNumber, e);
-            // CRITICAL: Null return means we're skipping a block - potential whale movements lost
+            // Treat rate-limits as a soft failure: do NOT throw and do NOT allow orchestrator to advance checkpoints.
+            if (is429Error(e)) {
+                log.warn("[429-CIRCUIT] Block {} still rate-limited after retries. Holding position and retrying later.", blockNumber);
+                return null;
+            }
+
+            if (e instanceof MessageDecodingException || isTransientDecodeGlitch(e)) {
+                long now = System.currentTimeMillis();
+                if (now - lastDecodeGlitchWarnAtMs.get() > 10_000L) {
+                    lastDecodeGlitchWarnAtMs.set(now);
+                    log.warn("[RPC-DECODE] Block {} provider payload glitch. Holding position and retrying later: {}",
+                            blockNumber, e.getMessage());
+                }
+                return null;
+            }
+
+            if (e.getMessage() != null && e.getMessage().contains("Empty block returned from RPC")) {
+                // Some endpoints transiently return empty blocks; do not treat as fatal.
+                long now = System.currentTimeMillis();
+                if (now - lastEmptyBlockWarnAtMs.get() > 5_000L) {
+                    lastEmptyBlockWarnAtMs.set(now);
+                    log.warn("[RPC-EMPTY] Block {} returned empty from RPC. Holding position and retrying later.", blockNumber);
+                }
+                return null;
+            }
+
+            log.error("Failed to fetch block {} after all retries", blockNumber, e);
             if (e.getMessage() != null && e.getMessage().contains("timeout")) {
-                log.error("CRITICAL: Block {} fetch timed out - SKIPPING BLOCK, POTENTIAL WHALE MOVEMENTS LOST", blockNumber);
+                log.error("CRITICAL: Block {} fetch timed out — SKIPPING BLOCK, POTENTIAL WHALE MOVEMENTS LOST", blockNumber);
                 return null;
             }
             throw new RuntimeException("Failed to fetch block " + blockNumber, e);
@@ -342,7 +467,15 @@ public class BaseBlockSource {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("Interrupted while fetching receipt for " + txHash, e);
+                if (!rpcExecutor.isShutdown()) {
+                    throw new RuntimeException("Interrupted while fetching receipt for " + txHash, e);
+                }
+                return Optional.<TransactionReceipt>empty();
+            } catch (RuntimeException re) {
+                if (is429Error(re)) {
+                    rpcConcurrencyGovernor.onRateLimitExceeded();
+                }
+                throw re;
             }
         }, rpcExecutor);
     }
@@ -452,7 +585,14 @@ public class BaseBlockSource {
         if (latestBlock <= last) {
             return new long[0];
         }
-        
-        return new long[]{last + 1, latestBlock};
+
+        long start = last + 1;
+        long end = latestBlock;
+        // maxBatchSize is injected via @Value in Spring; in plain unit tests it may remain 0.
+        // Treat non-positive values as "no explicit cap" so the controller/base config still applies.
+        long configuredCap = (maxBatchSize > 0) ? maxBatchSize : Long.MAX_VALUE;
+        long effectiveMaxBatchSize = Math.max(1L, Math.min(configuredCap, backpressureController.effectiveMaxBatchSize()));
+        end = Math.min(end, start + effectiveMaxBatchSize - 1);
+        return new long[]{start, end};
     }
 }

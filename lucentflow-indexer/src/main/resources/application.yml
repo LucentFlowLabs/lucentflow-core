@@ -63,6 +63,23 @@ management:
 
 # Basescan API Configuration
 lucentflow:
+  indexer:
+    # Scheduler: fixed delay between scan cycles (ms)
+    polling-interval-ms: ${LUCENTFLOW_INDEXER_POLLING_INTERVAL_MS:2000}
+    # Max block span returned per scan cycle (catch-up pressure valve)
+    max-batch-size: ${LUCENTFLOW_INDEXER_MAX_BATCH_SIZE:200}
+    # Baseline RPC concurrency for free-tier endpoints (governor may adapt on lag/429)
+    max-concurrency: ${LUCENTFLOW_INDEXER_MAX_CONCURRENCY:2}
+    # Catch-up boost (lag>1000) increases concurrency by releasing bonus permits.
+    # For strict providers (e.g. QuickNode 15 req/s), keep this disabled.
+    catchup-boost-enabled: ${LUCENTFLOW_INDEXER_CATCHUP_BOOST_ENABLED:false}
+    cooldown:
+      # Cooling-down window when HTTP 429 / rate limit is detected.
+      window-ms: ${LUCENTFLOW_INDEXER_COOLDOWN_WINDOW_MS:30000}
+      # During cooldown, orchestrator pacing is slowed to this scan interval (ms).
+      polling-interval-ms: ${LUCENTFLOW_INDEXER_COOLDOWN_POLLING_INTERVAL_MS:10000}
+      # During cooldown, block span is reduced to this max batch size.
+      max-batch-size: ${LUCENTFLOW_INDEXER_COOLDOWN_MAX_BATCH_SIZE:20}
   chain:
     # Zero-config default: Base mainnet public RPC; override with LUCENTFLOW_CHAIN_RPC_URL for professional endpoints
     rpc-url: ${LUCENTFLOW_CHAIN_RPC_URL:https://mainnet.base.org}
