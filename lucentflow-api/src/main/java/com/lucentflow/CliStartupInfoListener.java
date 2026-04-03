@@ -23,10 +23,10 @@ public class CliStartupInfoListener implements ApplicationListener<ApplicationSt
 
     @Override
     public void onApplicationEvent(ApplicationStartedEvent event) {
-        log.info("[CLI] 📂 Working Directory: {}", System.getProperty("user.dir", "."));
+        log.info("[CLI] Working directory: {}", System.getProperty("user.dir", "."));
         String envPath = AdaptiveEnvLoader.getLoadedEnvSourcePaths().isEmpty()
                 ? "none"
                 : String.join(" | ", AdaptiveEnvLoader.getLoadedEnvSourcePaths());
-        log.info("[CLI] 配置文件探测命中: {}", envPath);
+        log.info("[CLI] Resolved .env source paths: {}", envPath);
     }
 }

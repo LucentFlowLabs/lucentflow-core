@@ -67,12 +67,28 @@ logging:
     rollingpolicy:
       max-history: 7
   level:
-    com.lucentflow: INFO
+    # Per-block [PERF] is DEBUG; set LUCENTFLOW_LOGGING_LEVEL_COM_LUCENTFLOW=DEBUG in .env for deep tracing.
+    com.lucentflow: ${LUCENTFLOW_LOGGING_LEVEL_COM_LUCENTFLOW:INFO}
     okhttp3: INFO
     org.web3j: INFO
     org.hibernate.SQL: INFO
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
     org.flywaydb: INFO
+
+# Actuator: keep HTTP 200 on /actuator/health even when a component is DOWN so upstream probes
+# (e.g. synthetic monitors, legacy load balancers) still receive a JSON body and can parse details.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+      status:
+        http-mapping:
+          DOWN: 200
+          OUT_OF_SERVICE: 200
 
 ---
 spring:

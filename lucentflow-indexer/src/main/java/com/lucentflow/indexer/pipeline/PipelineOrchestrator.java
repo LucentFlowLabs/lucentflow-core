@@ -59,11 +59,23 @@ public class PipelineOrchestrator {
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;
 
+    /** Blocks taking longer than this log at WARN with [PERF-SLOW-QUERY]; faster paths log at DEBUG only. */
+    private static final long SLOW_RPC_THRESHOLD_MS = 2000L;
+
+    /** Every N successfully timed blocks, emit one INFO aggregate throughput line (avg ms per phase). */
+    private static final int PERF_SAMPLE_INTERVAL_BLOCKS = 100;
+
     private final IndexerRpcProfile indexerRpcProfile;
     private final RpcProviderConfig rpcProviderConfig;
 
     // Prevent overlapping scheduled executions from racing checkpoint writes.
     private final ReentrantLock scanLock = new ReentrantLock();
+
+    private final Object perfSampleLock = new Object();
+    private long perfWindowRpcSumMs;
+    private long perfWindowAnalysisSumMs;
+    private long perfWindowTotalSumMs;
+    private int perfWindowCount;
     
     // Removed duplicate Semaphore from Orchestrator as it should be managed inside BaseBlockSource directly
     
@@ -347,16 +359,23 @@ public class PipelineOrchestrator {
      */
     private boolean processBlock(long blockNumber) {
         try {
-            // SOURCE: Fetch block
+            long t0 = System.nanoTime();
             EthBlock.Block block = blockSource.fetchBlock(blockNumber);
+            long t1 = System.nanoTime();
             if (block == null) {
                 log.warn("[SOFT-FAIL] Block {} fetch returned null (timeout, rate-limit, interrupt, or shutdown); will retry later", blockNumber);
                 return false;
             }
             var transactions = blockSource.getTransactionsFromBlock(block);
-            
+            long t2 = System.nanoTime();
+
+            long rpcFetchMs = (t1 - t0) / 1_000_000L;
+            long analysisMs = (t2 - t1) / 1_000_000L;
+            long totalMs = (t2 - t0) / 1_000_000L;
+            recordBlockPipelinePerf(blockNumber, rpcFetchMs, analysisMs, totalMs);
+
             log.debug("Processing block {} with {} transactions", blockNumber, transactions.size());
-            
+
             // BaseBlockSource pushes whale transactions to TransactionPipe.
             // Pipeline processing of those transactions happens asynchronously downstream.
             return true;
@@ -370,6 +389,42 @@ public class PipelineOrchestrator {
                 log.warn("[RESILIENCE] Block {} failed: {}", blockNumber, e.getMessage());
             }
             return false;
+        }
+    }
+
+    /**
+     * Production observability: quiet steady state (DEBUG), loud on slow blocks (WARN), periodic INFO sample.
+     */
+    private void recordBlockPipelinePerf(long blockNumber, long rpcFetchMs, long analysisMs, long totalMs) {
+        if (totalMs >= SLOW_RPC_THRESHOLD_MS) {
+            log.warn(
+                    "[PERF-SLOW-QUERY] ⚠️ Block {} RPC fetch took {}ms | Analysis took {}ms | Total {}ms",
+                    blockNumber, rpcFetchMs, analysisMs, totalMs);
+        } else {
+            log.debug(
+                    "[PERF] Block {} RPC fetch took {}ms | Analysis took {}ms | Total {}ms",
+                    blockNumber, rpcFetchMs, analysisMs, totalMs);
+        }
+
+        synchronized (perfSampleLock) {
+            perfWindowRpcSumMs += rpcFetchMs;
+            perfWindowAnalysisSumMs += analysisMs;
+            perfWindowTotalSumMs += totalMs;
+            perfWindowCount++;
+            if (perfWindowCount >= PERF_SAMPLE_INTERVAL_BLOCKS) {
+                double n = PERF_SAMPLE_INTERVAL_BLOCKS;
+                log.info(
+                        "[PERF-SAMPLE] windowBlocks={} avgRpcMs={} avgAnalysisMs={} avgTotalMs={} (set {}=DEBUG for per-block [PERF])",
+                        PERF_SAMPLE_INTERVAL_BLOCKS,
+                        Math.round(perfWindowRpcSumMs / n),
+                        Math.round(perfWindowAnalysisSumMs / n),
+                        Math.round(perfWindowTotalSumMs / n),
+                        "LUCENTFLOW_LOGGING_LEVEL_COM_LUCENTFLOW");
+                perfWindowRpcSumMs = 0L;
+                perfWindowAnalysisSumMs = 0L;
+                perfWindowTotalSumMs = 0L;
+                perfWindowCount = 0;
+            }
         }
     }
     
