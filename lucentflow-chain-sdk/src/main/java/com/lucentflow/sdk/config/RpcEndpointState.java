@@ -42,6 +42,15 @@ public class RpcEndpointState {
     }
 
     /**
+     * @return {@code true} while the 5-minute failover window is active (traffic targets {@link #getBackupUrl()}).
+     */
+    public boolean isFailoverActive() {
+        expireFailoverIfDue();
+        long until = failoverUntilEpochMs.get();
+        return until > 0 && System.currentTimeMillis() < until;
+    }
+
+    /**
      * URL to use for the outgoing JSON-RPC HTTP request (full RPC URL including path).
      */
     public String currentRpcUrl() {

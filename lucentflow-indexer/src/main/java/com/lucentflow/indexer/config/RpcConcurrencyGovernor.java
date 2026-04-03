@@ -1,17 +1,19 @@
 package com.lucentflow.indexer.config;
 
-import lombok.extern.slf4j.Slf4j;
 import com.lucentflow.indexer.control.AdaptiveBackpressureController;
-import org.springframework.beans.factory.annotation.Value;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Dynamic fair semaphore for RPC concurrency: doubles effective permits when lag is high,
- * then best-effort drains bonus permits when caught up (Alchemy-safe cap).
+ * Dynamic fair concurrency gate for RPC: baseline permits follow {@link IndexerRpcProfile}
+ * (Alchemy vs public failover), optional catch-up boost when lag is high, and a cooling-down
+ * window after HTTP 429 (mirrors prior Semaphore semantics: at most one additional permit beyond
+ * in-flight work when cooling starts).
  *
  * @author ArchLucent
  * @since 1.0
@@ -28,120 +30,174 @@ public class RpcConcurrencyGovernor {
         COOLING_DOWN
     }
 
-    private final Semaphore semaphore;
-    private final int baselinePermits;
-    private final int maxTotalPermits;
+    private final AdaptiveBackpressureController backpressureController;
+    private final IndexerRpcProfile profile;
+
     private final AtomicReference<State> state = new AtomicReference<>(State.NORMAL);
     private final AtomicLong coolingDownUntilMs = new AtomicLong(0L);
 
+    private final ReentrantLock gate = new ReentrantLock(true);
+    private final Condition notFull = gate.newCondition();
+    private int inflight;
+
     /**
-     * Extra permits we injected via {@link Semaphore#release(int)} during catch-up; only that many
-     * {@link Semaphore#tryAcquire()} calls may succeed to drain them (idempotent across heartbeats).
+     * Extra capacity from catch-up boost (same meaning as legacy {@code bonusOutstanding}).
      */
     private int bonusOutstanding;
 
-    private final AdaptiveBackpressureController backpressureController;
-    private final boolean catchupBoostEnabled;
+    /**
+     * When {@link State#COOLING_DOWN}: max concurrent RPCs (set to {@code inflight + 1} at 429).
+     */
+    private int coolingCap = -1;
 
-    public RpcConcurrencyGovernor(@Value("${lucentflow.indexer.max-concurrency:2}") int maxConcurrency,
-                                  AdaptiveBackpressureController backpressureController,
-                                  @Value("${lucentflow.indexer.catchup-boost-enabled:false}") boolean catchupBoostEnabled) {
-        this.baselinePermits = Math.max(1, maxConcurrency);
-        this.maxTotalPermits = Math.min(ALCHEMY_MAX_CONCURRENT_PERMITS, baselinePermits * 2);
-        this.semaphore = new Semaphore(baselinePermits, true);
+    public RpcConcurrencyGovernor(AdaptiveBackpressureController backpressureController,
+                                  IndexerRpcProfile profile) {
         this.backpressureController = backpressureController;
-        this.catchupBoostEnabled = catchupBoostEnabled;
+        this.profile = profile;
     }
 
     public void acquire() throws InterruptedException {
         refreshCoolingStateIfExpired();
-        semaphore.acquire();
+        gate.lock();
+        try {
+            while (inflight >= effectiveCap()) {
+                notFull.await();
+            }
+            inflight++;
+        } finally {
+            gate.unlock();
+        }
     }
 
     public void release() {
-        semaphore.release();
-    }
-
-    public int getQueueLength() {
-        return semaphore.getQueueLength();
+        gate.lock();
+        try {
+            if (inflight > 0) {
+                inflight--;
+            }
+            notFull.signalAll();
+        } finally {
+            gate.unlock();
+        }
     }
 
     /**
-     * Permits currently available to acquire (baseline pool plus any unreleased catch-up bonus).
+     * Legacy hook; blocked threads wait on a {@link java.util.concurrent.locks.Condition} (length not exposed portably).
+     */
+    public int getQueueLength() {
+        return 0;
+    }
+
+    /**
+     * Permits available for new acquires (best-effort snapshot).
      */
     public int availablePermits() {
-        return semaphore.availablePermits();
+        gate.lock();
+        try {
+            return Math.max(0, effectiveCap() - inflight);
+        } finally {
+            gate.unlock();
+        }
+    }
+
+    public int getBaselinePermits() {
+        return profile.effectiveMaxConcurrency();
+    }
+
+    public boolean isCatchupBoostEnabled() {
+        return profile.effectiveCatchupBoostEnabled();
     }
 
     /**
      * Adaptive backoff hook: call when a 429 / rate-limit is detected.
-     *
-     * <p>Moves the governor into {@link State#COOLING_DOWN} for 30 seconds and forces effective
-     * concurrency down to 1 permit (best-effort). In-flight permits are not revoked, but new
-     * acquisitions will be throttled immediately.</p>
      */
     public void onRateLimitExceeded() {
         long until = System.currentTimeMillis() + COOLING_DOWN_WINDOW_MS;
         coolingDownUntilMs.accumulateAndGet(until, Math::max);
         state.set(State.COOLING_DOWN);
 
-        // Link to scheduler pacing + batch size throttling.
         backpressureController.onRateLimitExceeded();
 
-        // Best-effort: clear available permits and leave exactly 1.
-        int drained = semaphore.drainPermits();
-        semaphore.release(1);
-        bonusOutstanding = 0;
-        log.warn("[RPC-GOV] Rate limit detected. Entering COOLING_DOWN for {}ms (drained {}, baseline {}).",
-                COOLING_DOWN_WINDOW_MS, drained, baselinePermits);
+        gate.lock();
+        try {
+            coolingCap = inflight + 1;
+            bonusOutstanding = 0;
+            log.warn("[RPC-GOV] Rate limit detected. Entering COOLING_DOWN for {}ms (inflight={}, coolingCap={}).",
+                    COOLING_DOWN_WINDOW_MS, inflight, coolingCap);
+        } finally {
+            gate.unlock();
+        }
     }
 
     private void refreshCoolingStateIfExpired() {
-        if (state.get() != State.COOLING_DOWN) return;
+        if (state.get() != State.COOLING_DOWN) {
+            return;
+        }
         long now = System.currentTimeMillis();
         long until = coolingDownUntilMs.get();
-        if (now < until) return;
+        if (now < until) {
+            return;
+        }
 
-        // Restore baseline permits (best-effort); keep fairness.
-        state.set(State.NORMAL);
-        int drained = semaphore.drainPermits();
-        semaphore.release(baselinePermits);
-        bonusOutstanding = 0;
-        log.info("[RPC-GOV] Cooling window expired. Restored NORMAL concurrency (baseline {}, drained {}).",
-                baselinePermits, drained);
+        gate.lock();
+        try {
+            if (state.get() != State.COOLING_DOWN) {
+                return;
+            }
+            state.set(State.NORMAL);
+            coolingCap = -1;
+            bonusOutstanding = 0;
+            log.info("[RPC-GOV] Cooling window expired. Restored NORMAL concurrency (baseline {}).",
+                    profile.effectiveMaxConcurrency());
+            notFull.signalAll();
+        } finally {
+            gate.unlock();
+        }
+    }
+
+    private int effectiveCap() {
+        if (state.get() == State.COOLING_DOWN && coolingCap > 0) {
+            return coolingCap;
+        }
+        int baseline = profile.effectiveMaxConcurrency();
+        if (!profile.effectiveCatchupBoostEnabled()) {
+            return baseline;
+        }
+        return Math.min(ALCHEMY_MAX_CONCURRENT_PERMITS, baseline + bonusOutstanding);
     }
 
     /**
      * If {@code blockLag} exceeds 1000, release extra permits (up to cap). If lag drops below 10, drain only
-     * permits we previously injected (never more than {@link #bonusOutstanding}), so repeated heartbeats
-     * cannot over-drain the baseline pool.
+     * permits we previously injected.
      */
-    public synchronized void adjustForLag(long blockLag) {
+    public void adjustForLag(long blockLag) {
         refreshCoolingStateIfExpired();
         if (state.get() == State.COOLING_DOWN) {
             return;
         }
-        if (!catchupBoostEnabled) {
+        if (!profile.effectiveCatchupBoostEnabled()) {
             return;
         }
-        if (blockLag > 1000L && bonusOutstanding == 0) {
-            int extra = Math.min(baselinePermits, maxTotalPermits - baselinePermits);
-            if (extra > 0) {
-                semaphore.release(extra);
-                bonusOutstanding = extra;
-                log.info("[CATCH-UP] blockLag={} > 1000; releasing {} extra RPC permits (cap ~{})",
-                        blockLag, extra, maxTotalPermits);
+        gate.lock();
+        try {
+            int baseline = profile.effectiveMaxConcurrency();
+            int maxTotal = Math.min(ALCHEMY_MAX_CONCURRENT_PERMITS, baseline * 2);
+            if (blockLag > 1000L && bonusOutstanding == 0) {
+                int extra = Math.min(baseline, maxTotal - baseline);
+                if (extra > 0) {
+                    bonusOutstanding = extra;
+                    log.info("[CATCH-UP] blockLag={} > 1000; releasing {} extra RPC permits (cap ~{})",
+                            blockLag, extra, maxTotal);
+                    notFull.signalAll();
+                }
+            } else if (blockLag < 10L && bonusOutstanding > 0) {
+                int cleared = bonusOutstanding;
+                bonusOutstanding = 0;
+                log.info("[CATCH-UP] blockLag={} < 10; cleared {} bonus capacity", blockLag, cleared);
+                notFull.signalAll();
             }
-        } else if (blockLag < 10L && bonusOutstanding > 0) {
-            int drained = 0;
-            while (bonusOutstanding > 0 && semaphore.tryAcquire()) {
-                bonusOutstanding--;
-                drained++;
-            }
-            log.info("[CATCH-UP] blockLag={} < 10; drained {} bonus permits (best-effort)", blockLag, drained);
-            if (bonusOutstanding > 0) {
-                log.debug("[CATCH-UP] {} bonus permits still pending drain (held by in-flight RPC)", bonusOutstanding);
-            }
+        } finally {
+            gate.unlock();
         }
     }
 }

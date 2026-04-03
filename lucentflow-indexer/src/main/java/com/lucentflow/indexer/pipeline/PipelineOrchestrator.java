@@ -2,6 +2,7 @@ package com.lucentflow.indexer.pipeline;
 
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.control.AdaptiveBackpressureController;
+import com.lucentflow.indexer.config.IndexerRpcProfile;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
@@ -21,8 +22,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
-import org.springframework.beans.factory.annotation.Value;
-
 /**
  * High-throughput blockchain indexing pipeline orchestrator with zero-loss guarantees.
  * 
@@ -60,8 +59,8 @@ public class PipelineOrchestrator {
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;
 
-    private final long pipelineChunkSize;
-    private final long interBatchSleepMillis;
+    private final IndexerRpcProfile indexerRpcProfile;
+    private final RpcProviderConfig rpcProviderConfig;
 
     // Prevent overlapping scheduled executions from racing checkpoint writes.
     private final ReentrantLock scanLock = new ReentrantLock();
@@ -77,7 +76,7 @@ public class PipelineOrchestrator {
                                 JdbcTemplate jdbcTemplate,
                                 RpcConcurrencyGovernor rpcConcurrencyGovernor,
                                 AdaptiveBackpressureController backpressureController,
-                                @Value("${lucentflow.indexer.max-batch-size:200}") long maxBatchSize) {
+                                IndexerRpcProfile indexerRpcProfile) {
         this.blockSource = blockSource;
         this.whaleDatabaseSink = whaleDatabaseSink;
         this.syncStatusRepository = syncStatusRepository;
@@ -85,21 +84,20 @@ public class PipelineOrchestrator {
         this.jdbcTemplate = jdbcTemplate;
         this.rpcConcurrencyGovernor = rpcConcurrencyGovernor;
         this.backpressureController = backpressureController;
-        // Use the smaller of provider-optimized chunk size and user-defined max-batch-size.
-        this.pipelineChunkSize = Math.max(1L, Math.min(rpcProviderConfig.recommendedPipelineChunkSize(), maxBatchSize));
-        this.interBatchSleepMillis = rpcProviderConfig.interBatchSleepMillis();
+        this.indexerRpcProfile = indexerRpcProfile;
+        this.rpcProviderConfig = rpcProviderConfig;
     }
     
     /**
      * Main scheduled entry point for blockchain indexing operations.
      * 
-     * <p>Executes every 2 seconds to check for new blocks and process them through
-     * the complete indexing pipeline. Uses adaptive processing strategy based on block volume.
+     * <p>Runs on a short scheduler tick; {@link AdaptiveBackpressureController} enforces effective polling
+     * (primary vs backup failover pacing). Uses adaptive processing strategy based on block volume.
      * Transaction boundaries ensure zero-loss guarantee across the entire operation.</p>
      * 
      * @throws RuntimeException if critical pipeline components fail
      */
-    @Scheduled(fixedDelayString = "${lucentflow.indexer.polling-interval-ms:2000}")
+    @Scheduled(fixedDelayString = "${lucentflow.indexer.scheduler-tick-ms:200}")
     public void scanForNewBlocks() {
         if (!scanLock.tryLock()) {
             log.debug("scanForNewBlocks skipped: previous execution still running");
@@ -121,12 +119,20 @@ public class PipelineOrchestrator {
             if (blockRange.length == 0) {
                 return;
             }
-            
+
+            long pipelineChunkSize = indexerRpcProfile.effectivePipelineChunkSize(rpcProviderConfig);
+            long interBatchSleepMillis = indexerRpcProfile.effectiveInterBatchSleepMillis(rpcProviderConfig);
+
             long startBlock = blockRange[0];
             long endBlock = blockRange[1];
             long blocksToProcess = endBlock - startBlock + 1;
-            
-            log.debug("Processing {} blocks: {} to {}", blocksToProcess, startBlock, endBlock);
+
+            long sleepBetweenChunks = Math.max(interBatchSleepMillis, 500L);
+            log.info(
+                    "[SCAN] Starting batch {}–{} ({} blocks): pipelineChunkSize={}, interBatchSleepMs={} (officialHardcodedPacing={}). "
+                            + "First [HEARTBEAT] appears after the first chunk finishes (not stalled unless this line repeats without progress).",
+                    startBlock, endBlock, blocksToProcess, pipelineChunkSize, sleepBetweenChunks,
+                    indexerRpcProfile.usesOfficialHardcodedPacing());
             
             // Checkpoint/Resume: chunk size adapts to RPC provider (public vs professional).
             java.util.List<java.util.concurrent.CompletableFuture<Void>> checkpointFutures =
@@ -145,12 +151,18 @@ public class PipelineOrchestrator {
                             chunkStart, chunkEnd);
                     break;
                 }
-                
+
+                log.info(
+                        "[SCAN] Chunk {}–{} ({} blocks) — fetching via RPC (parallel={}); this can take minutes behind a proxy or with low max-concurrency.",
+                        chunkStart, chunkEnd, blocksInChunk, blocksInChunk > PARALLEL_PROCESSING_THRESHOLD);
                 boolean chunkSucceeded;
                 if (blocksInChunk > PARALLEL_PROCESSING_THRESHOLD) {
                     chunkSucceeded = processBlocksParallel(chunkStart, chunkEnd);
                 } else {
                     chunkSucceeded = processBlocksSequential(chunkStart, chunkEnd);
+                }
+                if (chunkSucceeded) {
+                    log.info("[SCAN] Chunk {}–{} completed; scheduling checkpoint and heartbeat.", chunkStart, chunkEnd);
                 }
 
                 // CRITICAL: Never advance checkpoint if any block failed.
@@ -240,6 +252,12 @@ public class PipelineOrchestrator {
     private boolean processBlocksParallel(long startBlock, long endBlock) {
         log.debug("Processing {} blocks in parallel: {} to {}",
                    endBlock - startBlock + 1, startBlock, endBlock);
+        long n = endBlock - startBlock + 1;
+        if (n >= 50) {
+            log.info(
+                    "[SCAN] Parallel chunk {}–{}: awaiting {} RPC futures (per-block submit jitter adds a few seconds on this thread).",
+                    startBlock, endBlock, n);
+        }
 
         // Use a List to avoid null entries in the futures array.
         // Pre-allocating with a raw array is dangerous: early breaks (shutdown / RejectedExecution)

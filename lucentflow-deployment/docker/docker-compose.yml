@@ -85,8 +85,10 @@ services:
       SPRING_FLYWAY_USERNAME: ${POSTGRES_USER:-admin}
       JAVA_OPTS: ${JAVA_OPTS:--XX:+UseZGC -XX:+ZGenerational -Xms512m -Xmx2g}
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-docker}
-      PROXY_HOST: ${PROXY_HOST:-127.0.0.1}
-      PROXY_PORT: ${PROXY_PORT:-10808}
+      # Do NOT default to 127.0.0.1: inside the container that is the container itself, not your host VPN.
+      # Set PROXY_HOST/PROXY_PORT in .env only when needed (e.g. host.docker.internal:10808 on Docker Desktop).
+      PROXY_HOST: ${PROXY_HOST:-}
+      PROXY_PORT: ${PROXY_PORT:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       BASESCAN_API_KEY: ${BASESCAN_API_KEY:-}

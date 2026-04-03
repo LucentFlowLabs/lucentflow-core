@@ -4,8 +4,9 @@ import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.common.utils.Erc20Decoder;
 import com.lucentflow.indexer.control.AdaptiveBackpressureController;
+import com.lucentflow.indexer.config.IndexerRpcProfile;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
-import com.lucentflow.indexer.exception.RateLimitException;
+import com.lucentflow.common.exception.RateLimitException;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.sdk.config.RpcProviderConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.context.event.EventListener;
@@ -57,6 +60,7 @@ public class BaseBlockSource {
 
     /** Unified backpressure: fair permits with optional catch-up scaling via {@link RpcConcurrencyGovernor}. */
     private final RpcConcurrencyGovernor rpcConcurrencyGovernor;
+    private final IndexerRpcProfile indexerRpcProfile;
     
     // Virtual Thread Executor for non-blocking Async RPC calls
     private final ExecutorService rpcExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -79,13 +83,18 @@ public class BaseBlockSource {
                            RpcProviderConfig rpcProviderConfig,
                            RpcConcurrencyGovernor rpcConcurrencyGovernor,
                            AdaptiveBackpressureController backpressureController,
+                           IndexerRpcProfile indexerRpcProfile,
                            ObjectProvider<org.flywaydb.core.Flyway> flywayProvider) {
         this.web3j = web3j;
         this.syncStatusRepository = syncStatusRepository;
         this.transactionPipe = transactionPipe;
         this.rpcConcurrencyGovernor = rpcConcurrencyGovernor;
         this.backpressureController = backpressureController;
-        int permits = rpcProviderConfig.recommendedRpcSemaphorePermits();
+        this.indexerRpcProfile = indexerRpcProfile;
+        int recommendedPermits = rpcProviderConfig.recommendedRpcSemaphorePermits();
+        int pipelineChunk = rpcProviderConfig.recommendedPipelineChunkSize();
+        long interBatchMs = rpcProviderConfig.interBatchSleepMillis();
+        int effectivePermits = rpcConcurrencyGovernor.getBaselinePermits();
         // Timeout calibration: professional endpoints should fail fast and retry.
         int timeoutSeconds = switch (rpcProviderConfig.providerType()) {
             case PROFESSIONAL -> 10;
@@ -93,16 +102,17 @@ public class BaseBlockSource {
         };
         this.rpcBlockTimeoutSeconds = timeoutSeconds;
         this.rpcReceiptTimeoutSeconds = timeoutSeconds;
-        String optimizationMode = switch (rpcProviderConfig.providerType()) {
-            case PROFESSIONAL -> "high-throughput concurrent RPC (%d permits)".formatted(permits);
-            case PUBLIC -> "conservative public-RPC throttling (%d permits)".formatted(permits);
-        };
-        log.info("[RPC-DETECTION] Detected {} endpoint. Optimized for {}.",
-                rpcProviderConfig.providerType(), optimizationMode);
-        if (rpcProviderConfig.providerType() == com.lucentflow.sdk.config.RpcProviderType.PROFESSIONAL) {
-            // Diagnostic for tuning: used to detect whether 429 bursts return.
-            log.info("[PERF-STEALTH] Running in high-stability mode. {} permits, {} chunk size.",
-                    permits, rpcProviderConfig.recommendedPipelineChunkSize());
+        log.info(
+                "[RPC-DETECTION] Detected {} endpoint. Provider tier defaults: recommendedPermits={}, pipelineChunkSize={}, interBatchSleepMs={}.",
+                rpcProviderConfig.providerType(), recommendedPermits, pipelineChunk, interBatchMs);
+        log.info(
+                "[RPC-DETECTION] Effective RPC concurrency (lucentflow.indexer.max-concurrency): {} permits; catch-up boost={}. "
+                        + "If throughput is low, align max-concurrency with recommendedPermits (or your RPC plan).",
+                effectivePermits, rpcConcurrencyGovernor.isCatchupBoostEnabled());
+        if (recommendedPermits != effectivePermits) {
+            log.info(
+                    "[RPC-DETECTION] recommendedPermits ({}) differs from effective ({}) — indexing uses lucentflow.indexer.max-concurrency; raise it if your RPC plan allows.",
+                    recommendedPermits, effectivePermits);
         }
         // Trigger Flyway initialization if present (bean side-effects / migrations).
         flywayProvider.getIfAvailable();
@@ -113,8 +123,9 @@ public class BaseBlockSource {
             .maxAttempts(5)
             .retryExceptions(
                 org.web3j.protocol.exceptions.ClientConnectionException.class,
-                com.lucentflow.indexer.exception.RateLimitException.class,
+                RateLimitException.class,
                 MessageDecodingException.class,
+                TimeoutException.class,
                 java.net.SocketTimeoutException.class,
                 java.net.ConnectException.class
             )
@@ -129,14 +140,12 @@ public class BaseBlockSource {
     @org.springframework.beans.factory.annotation.Value("${lucentflow.indexer.start-block:#{null}}")
     private Long configuredStartBlock;
 
-    @Value("${lucentflow.indexer.max-batch-size:200}")
-    private long maxBatchSize;
-
     private final AdaptiveBackpressureController backpressureController;
 
     // Prevent provider glitch logs from flooding when the endpoint continuously returns non-standard payloads.
     private final AtomicLong lastDecodeGlitchWarnAtMs = new AtomicLong(0L);
     private final AtomicLong lastEmptyBlockWarnAtMs = new AtomicLong(0L);
+    private final AtomicLong lastTimeoutWarnAtMs = new AtomicLong(0L);
 
     // Shared across scheduler executions; ensure visibility across threads.
     private volatile Long lastScannedBlock;
@@ -287,6 +296,22 @@ public class BaseBlockSource {
         }
         return false;
     }
+
+    private static boolean isTimeoutError(Throwable t) {
+        if (t == null) return false;
+        for (Throwable x = t; x != null; x = x.getCause()) {
+            if (x instanceof TimeoutException) return true;
+            if (x instanceof java.net.SocketTimeoutException) return true;
+        }
+        return false;
+    }
+
+    private static Throwable unwrapExecution(Throwable t) {
+        if (t instanceof ExecutionException ee && ee.getCause() != null) {
+            return ee.getCause();
+        }
+        return t;
+    }
     
     /**
      * Get the last scanned block number.
@@ -359,11 +384,19 @@ public class BaseBlockSource {
                     }, rpcExecutor);
 
                     // Apply hard timeout based on provider tier
-                    EthBlock block = future.orTimeout(rpcBlockTimeoutSeconds, TimeUnit.SECONDS).get();
-                    if (block == null || block.getBlock() == null) {
-                        throw new RuntimeException("Empty block returned from RPC");
+                    try {
+                        EthBlock block = future.orTimeout(rpcBlockTimeoutSeconds, TimeUnit.SECONDS).get();
+                        if (block == null || block.getBlock() == null) {
+                            throw new RuntimeException("Empty block returned from RPC");
+                        }
+                        return block.getBlock();
+                    } catch (ExecutionException ee) {
+                        Throwable cause = unwrapExecution(ee);
+                        if (cause instanceof TimeoutException) {
+                            throw (TimeoutException) cause;
+                        }
+                        throw ee;
                     }
-                    return block.getBlock();
                 } finally {
                     rpcConcurrencyGovernor.release();
                 }
@@ -388,13 +421,14 @@ public class BaseBlockSource {
         try {
             return blockSupplier.get();
         } catch (Throwable e) {
+            Throwable root = unwrapExecution(e);
             // Treat rate-limits as a soft failure: do NOT throw and do NOT allow orchestrator to advance checkpoints.
-            if (is429Error(e)) {
+            if (is429Error(root)) {
                 log.warn("[429-CIRCUIT] Block {} still rate-limited after retries. Holding position and retrying later.", blockNumber);
                 return null;
             }
 
-            if (e instanceof MessageDecodingException || isTransientDecodeGlitch(e)) {
+            if (root instanceof MessageDecodingException || isTransientDecodeGlitch(root)) {
                 long now = System.currentTimeMillis();
                 if (now - lastDecodeGlitchWarnAtMs.get() > 10_000L) {
                     lastDecodeGlitchWarnAtMs.set(now);
@@ -404,7 +438,7 @@ public class BaseBlockSource {
                 return null;
             }
 
-            if (e.getMessage() != null && e.getMessage().contains("Empty block returned from RPC")) {
+            if (root != null && root.getMessage() != null && root.getMessage().contains("Empty block returned from RPC")) {
                 // Some endpoints transiently return empty blocks; do not treat as fatal.
                 long now = System.currentTimeMillis();
                 if (now - lastEmptyBlockWarnAtMs.get() > 5_000L) {
@@ -414,11 +448,17 @@ public class BaseBlockSource {
                 return null;
             }
 
-            log.error("Failed to fetch block {} after all retries", blockNumber, e);
-            if (e.getMessage() != null && e.getMessage().contains("timeout")) {
-                log.error("CRITICAL: Block {} fetch timed out — SKIPPING BLOCK, POTENTIAL WHALE MOVEMENTS LOST", blockNumber);
+            if (isTimeoutError(root)) {
+                long now = System.currentTimeMillis();
+                if (now - lastTimeoutWarnAtMs.get() > 10_000L) {
+                    lastTimeoutWarnAtMs.set(now);
+                    log.warn("[RPC-TIMEOUT] Block {} timed out after retries. Holding position and retrying later.", blockNumber);
+                }
+                rpcConcurrencyGovernor.onRateLimitExceeded();
                 return null;
             }
+
+            log.error("Failed to fetch block {} after all retries", blockNumber, e);
             throw new RuntimeException("Failed to fetch block " + blockNumber, e);
         }
     }
@@ -588,9 +628,7 @@ public class BaseBlockSource {
 
         long start = last + 1;
         long end = latestBlock;
-        // maxBatchSize is injected via @Value in Spring; in plain unit tests it may remain 0.
-        // Treat non-positive values as "no explicit cap" so the controller/base config still applies.
-        long configuredCap = (maxBatchSize > 0) ? maxBatchSize : Long.MAX_VALUE;
+        long configuredCap = Math.max(1L, indexerRpcProfile.effectiveMaxBatchSizeCap());
         long effectiveMaxBatchSize = Math.max(1L, Math.min(configuredCap, backpressureController.effectiveMaxBatchSize()));
         end = Math.min(end, start + effectiveMaxBatchSize - 1);
         return new long[]{start, end};

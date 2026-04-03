@@ -3,6 +3,7 @@ package com.lucentflow.indexer.source;
 import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.control.AdaptiveBackpressureController;
+import com.lucentflow.indexer.config.IndexerRpcProfile;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.sdk.config.RpcProviderConfig;
@@ -32,6 +33,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.*;
 
 /**
@@ -81,21 +83,22 @@ class BaseBlockSourceTest {
     
     private BaseBlockSource baseBlockSource;
 
-    private static AdaptiveBackpressureController controller() {
-        // basePolling=2000, baseMaxBatch=200, cooldownWindow=30000, cooldownPolling=10000, cooldownBatch=20
-        return new AdaptiveBackpressureController(2000L, 200L, 30_000L, 10_000L, 20L);
-    }
-    
     @BeforeEach
     void setUp() {
         // Create a mock ObjectProvider that returns null (Flyway disabled)
         ObjectProvider<org.flywaydb.core.Flyway> flywayProvider = mock(ObjectProvider.class);
         when(flywayProvider.getIfAvailable()).thenReturn(null);
 
+        IndexerRpcProfile indexerRpcProfile = mock(IndexerRpcProfile.class);
+        lenient().when(indexerRpcProfile.effectiveMaxBatchSizeCap()).thenReturn(200L);
+        lenient().when(indexerRpcProfile.effectiveMaxConcurrency()).thenReturn(2);
+        lenient().when(indexerRpcProfile.effectiveCatchupBoostEnabled()).thenReturn(true);
+
         RpcProviderConfig rpcProviderConfig = new RpcProviderConfig(RpcProviderType.PUBLIC, 2, 50, 3000L);
-        RpcConcurrencyGovernor rpcConcurrencyGovernor = new RpcConcurrencyGovernor(2, controller(), true);
+        AdaptiveBackpressureController backpressure = new AdaptiveBackpressureController(indexerRpcProfile);
+        RpcConcurrencyGovernor rpcConcurrencyGovernor = new RpcConcurrencyGovernor(backpressure, indexerRpcProfile);
         baseBlockSource = new BaseBlockSource(web3j, syncStatusRepository, transactionPipe, rpcProviderConfig,
-                rpcConcurrencyGovernor, controller(), flywayProvider);
+                rpcConcurrencyGovernor, backpressure, indexerRpcProfile, flywayProvider);
     }
 
     /** ID=1 protocol: checkpoint row used by {@code initializeLastScannedBlock} / {@code resolveStartBlock}. */

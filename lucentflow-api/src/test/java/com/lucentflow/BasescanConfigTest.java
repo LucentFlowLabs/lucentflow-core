@@ -2,8 +2,8 @@ package com.lucentflow;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.flywaydb.core.Flyway;
 
 /**
@@ -16,7 +16,7 @@ import org.flywaydb.core.Flyway;
 })
 public class BasescanConfigTest {
     
-    @MockBean
+    @MockitoBean
     private Flyway flyway;
     
     @Test

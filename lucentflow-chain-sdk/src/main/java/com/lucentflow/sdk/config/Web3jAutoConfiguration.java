@@ -154,8 +154,16 @@ public class Web3jAutoConfiguration {
         if (proxyHost != null && !proxyHost.isBlank() && proxyPort != null && !proxyPort.isBlank()) {
             try {
                 int port = Integer.parseInt(proxyPort.trim());
-                builder.proxy(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxyHost.trim(), port)));
-                log.info("[HTTP-CLIENT] Outbound HTTP proxy enabled: {}:{}", proxyHost.trim(), port);
+                String host = proxyHost.trim();
+                builder.proxy(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port)));
+                log.info("[HTTP-CLIENT] Outbound HTTP proxy enabled: {}:{}", host, port);
+                if (isLoopbackProxyHost(host)) {
+                    log.warn(
+                            "[HTTP-CLIENT] PROXY_HOST is loopback ({}). In Docker containers 127.0.0.1/localhost is the container, "
+                                    + "not your host VPN — RPC will fail with 'Failed to connect to /127.0.0.1:...'. "
+                                    + "Use host.docker.internal (Docker Desktop) or unset PROXY_* if direct egress works.",
+                            host);
+                }
             } catch (NumberFormatException e) {
                 log.warn("[HTTP-CLIENT] Invalid PROXY_PORT '{}', proxy disabled.", proxyPort);
             }
@@ -192,16 +200,23 @@ public class Web3jAutoConfiguration {
      * @return immutable recommended limits for indexer components
      */
     @Bean
-    public RpcProviderConfig rpcProviderConfig(Web3jProperties properties) {
+    public RpcProviderConfig rpcProviderConfig(
+            Web3jProperties properties,
+            @Value("${lucentflow.chain.professional-inter-batch-sleep-ms:2000}") long professionalInterBatchSleepMs) {
         RpcProviderType type = RpcProviderType.fromRpcUrl(properties.getRpcUrl());
+        long proSleep = Math.max(0L, professionalInterBatchSleepMs);
         // Alchemy / QuickNode / Infura / BlastAPI: conservative free-tier throttling.
         return switch (type) {
             // Professional endpoints: 8 permits is the Alchemy Free-Tier sweet spot
             // (330 CUPS budget / ~40 CUPS per block = safe ceiling for sustained syncs).
-            // 2000ms inter-batch delay ensures the rate-limit bucket fully resets between chunks.
-            case PROFESSIONAL -> new RpcProviderConfig(type, 8, 100, 2000L);
+            // Inter-batch delay is tunable via lucentflow.chain.professional-inter-batch-sleep-ms (default 2000ms).
+            case PROFESSIONAL -> new RpcProviderConfig(type, 8, 100, proSleep);
             case PUBLIC -> new RpcProviderConfig(type, 2, 50, 3000L);
         };
+    }
+
+    private static boolean isLoopbackProxyHost(String host) {
+        return "127.0.0.1".equals(host) || "::1".equals(host) || "localhost".equalsIgnoreCase(host);
     }
 
     /**

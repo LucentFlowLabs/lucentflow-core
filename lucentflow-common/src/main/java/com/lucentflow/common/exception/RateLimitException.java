@@ -1,4 +1,4 @@
-package com.lucentflow.indexer.exception;
+package com.lucentflow.common.exception;
 
 /**
  * Signals an upstream RPC rate limit (HTTP 429 / "over rate limit") and is used to trigger
@@ -17,4 +17,3 @@ public class RateLimitException extends RuntimeException {
         super(message, cause);
     }
 }
-
