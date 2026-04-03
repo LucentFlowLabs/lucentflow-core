@@ -42,6 +42,17 @@ import java.time.Instant;
 @Component
 public class TransactionTransformer {
     
+    /**
+     * Minimum pipeline-entry threshold for this transformer (0.01 ETH in Wei).
+     *
+     * <p>This is intentionally lower than the strict whale threshold used by {@code BaseBlockSource}
+     * (10 ETH for plain ETH transfers) because the transformer must also admit:
+     * <ul>
+     *   <li>Contract creations (0 ETH value) for factory/rug-pull analysis</li>
+     *   <li>Small-value core-token ERC-20 interactions (e.g. USDC, AERO) decoded from receipts</li>
+     * </ul>
+     * The final whale classification is applied downstream in {@code WhaleAnalysisWorker.isWhale()}.</p>
+     */
     private static final BigInteger WHALE_THRESHOLD_WEI = EthUnitConverter.etherStringToWei("0.01");
     
     /**
@@ -132,11 +143,11 @@ public class TransactionTransformer {
     }
     
     /**
-     * Check if a transaction qualifies as a whale transaction (>10 ETH).
-     * Uses pre-calculated WHALE_THRESHOLD_WEI constant for O(1) performance.
-     * 
+     * Returns {@code true} if the transaction value exceeds the pipeline-entry threshold (0.01 ETH).
+     * This is a broad pre-filter, not the strict whale threshold; see {@link #WHALE_THRESHOLD_WEI}.
+     *
      * @param tx Transaction to check, may be null
-     * @return true if value > 10 ETH, false otherwise
+     * @return true if value {@literal >} 0.01 ETH, false otherwise
      */
     public boolean isWhaleTransaction(Transaction tx) {
         if (tx == null || tx.getValue() == null) {

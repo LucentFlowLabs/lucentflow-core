@@ -2,6 +2,9 @@
 
 # LucentFlow Infrastructure Startup Script (Windows PowerShell)
 # This script starts PostgreSQL, pgAdmin, and Metabase services
+#
+# @author ArchLucent
+# @since 1.0
 
 param(
     [switch]$Cleanup
@@ -37,6 +40,7 @@ try {
 
 # Navigate to deployment directory
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = $ScriptDir
 $DeployDir = Join-Path $ScriptDir "lucentflow-deployment\docker"
 Set-Location $DeployDir
 
@@ -54,6 +58,8 @@ if (-not (Test-Path $EnvFile)) {
         Write-Host "❌ .env.example file not found!" -ForegroundColor Red
         exit 1
     }
+} else {
+    Write-Host "[CONF] Existing .env detected at $DeployDir. Preserving your private keys." -ForegroundColor Green
 }
 
 # Load environment variables from .env file
@@ -87,7 +93,7 @@ Write-Host "ℹ️  Note: First-time build might take a few minutes to download 
 
 # Start all services with Docker Compose V2
 try {
-    docker compose up -d
+    docker compose up -d --build lucentflow-api
     Write-Host "✅ Docker Compose V2 started successfully" -ForegroundColor Green
 } catch {
     Write-Host "❌ Failed to start Docker Compose V2: $_" -ForegroundColor Red
@@ -170,10 +176,11 @@ Write-Host "💡 Navigate to lucentflow-api directory and run:" -ForegroundColor
 Write-Host "   mvn spring-boot:run" -ForegroundColor White
 Write-Host ""
 Write-Host "📦 JAR Execution (Alternative):" -ForegroundColor Cyan
+$JarFromProjectRoot = "lucentflow-api\target\lucentflow-api.jar"
 if ($JavaProxyArgs) {
-    Write-Host "   java $JavaProxyArgs -jar lucentflow-api\target\lucentflow-api-1.0.0-RELEASE.jar" -ForegroundColor White
+    Write-Host "   java $JavaProxyArgs -jar $JarFromProjectRoot" -ForegroundColor White
 } else {
-    Write-Host "   java -jar lucentflow-api\target\lucentflow-api-1.0.0-RELEASE.jar" -ForegroundColor White
+    Write-Host "   java -jar $JarFromProjectRoot" -ForegroundColor White
 }
 Write-Host ""
 Write-Host "�📖 API Documentation will be available at:" -ForegroundColor Cyan
@@ -202,7 +209,7 @@ if ($Cleanup) {
     } finally {
         Write-Host "🛑 Stopping services..." -ForegroundColor Yellow
         Set-Location $DeployDir
-        docker-compose down
+        docker compose down
         Write-Host "✅ Services stopped and cleaned up" -ForegroundColor Green
     }
 } else {

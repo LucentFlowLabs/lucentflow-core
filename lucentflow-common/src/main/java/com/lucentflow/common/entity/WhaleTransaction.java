@@ -23,7 +23,9 @@ import java.time.Instant;
            @Index(name = "idx_wt_to_address", columnList = "to_address"),
            @Index(name = "idx_wt_block_number", columnList = "block_number"),
            @Index(name = "idx_wt_timestamp", columnList = "timestamp"),
-           @Index(name = "idx_wt_value_eth", columnList = "value_eth")
+           @Index(name = "idx_wt_value_eth", columnList = "value_eth"),
+           @Index(name = "idx_wt_bytecode_hash", columnList = "bytecode_hash"),
+           @Index(name = "idx_wt_token_address", columnList = "token_address")
        })
 @Getter
 @Setter
@@ -70,16 +72,16 @@ public class WhaleTransaction {
     @Builder.Default
     private String transactionType = "UNKNOWN";
     
-    @Column(name = "from_address_tag", length = 50)
+    @Column(name = "from_address_tag", length = 100)
     private String fromAddressTag;
     
-    @Column(name = "to_address_tag", length = 20)
+    @Column(name = "to_address_tag", length = 100)
     private String toAddressTag;
     
     @Column(name = "whale_category", length = 30)
     private String whaleCategory;
     
-    @Column(name = "address_tag", length = 50)
+    @Column(name = "address_tag", length = 100)
     private String addressTag;
     
     @Column(name = "transaction_category", length = 30)
@@ -94,6 +96,44 @@ public class WhaleTransaction {
     @Column(name = "rug_risk_level", length = 20)
     private String rugRiskLevel;
 
+    @Column(name = "risk_score")
+    private Integer riskScore;
+
+    public void setRiskScore(Integer riskScore) {
+        this.riskScore = riskScore;
+        if (riskScore != null) {
+            if (riskScore <= 30) {
+                this.rugRiskLevel = "LOW";
+            } else if (riskScore <= 60) {
+                this.rugRiskLevel = "MEDIUM";
+            } else if (riskScore <= 80) {
+                this.rugRiskLevel = "HIGH";
+            } else {
+                this.rugRiskLevel = "CRITICAL";
+            }
+        }
+    }
+
+    @Column(name = "risk_reasons", length = 1000)
+    private String riskReasons;
+
+    @Column(name = "execution_status", length = 20)
+    private String executionStatus;
+
+    /**
+     * SHA-256 hex (64 chars) of creation {@code input} — identical across clone deployments.
+     */
+    @Column(name = "bytecode_hash", length = 64)
+    private String bytecodeHash;
+
+    /** Core ERC-20 symbol when {@link #transactionType} is {@code ERC20_TRANSFER}. */
+    @Column(name = "token_symbol", length = 32)
+    private String tokenSymbol;
+
+    /** ERC-20 contract address (Base mainnet). */
+    @Column(name = "token_address", length = 42)
+    private String tokenAddress;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @CreatedDate
     private Instant createdAt;
@@ -107,6 +147,9 @@ public class WhaleTransaction {
         Instant now = Instant.now();
         createdAt = now;
         updatedAt = now;
+        if (timestamp == null) {
+            timestamp = now;
+        }
         
         // Auto-detect contract creation if toAddress is null
         if (toAddress == null || toAddress.trim().isEmpty()) {

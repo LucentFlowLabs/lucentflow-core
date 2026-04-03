@@ -2,7 +2,12 @@ package com.lucentflow.indexer.source;
 
 import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
+import com.lucentflow.indexer.control.AdaptiveBackpressureController;
+import com.lucentflow.indexer.config.IndexerRpcProfile;
+import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
+import com.lucentflow.sdk.config.RpcProviderConfig;
+import com.lucentflow.sdk.config.RpcProviderType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,6 +33,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.*;
 
 /**
@@ -76,14 +82,31 @@ class BaseBlockSourceTest {
     private EthBlock mockEthBlock;
     
     private BaseBlockSource baseBlockSource;
-    
+
     @BeforeEach
     void setUp() {
         // Create a mock ObjectProvider that returns null (Flyway disabled)
         ObjectProvider<org.flywaydb.core.Flyway> flywayProvider = mock(ObjectProvider.class);
         when(flywayProvider.getIfAvailable()).thenReturn(null);
-        
-        baseBlockSource = new BaseBlockSource(web3j, syncStatusRepository, transactionPipe, flywayProvider);
+
+        IndexerRpcProfile indexerRpcProfile = mock(IndexerRpcProfile.class);
+        lenient().when(indexerRpcProfile.effectiveMaxBatchSizeCap()).thenReturn(200L);
+        lenient().when(indexerRpcProfile.effectiveMaxConcurrency()).thenReturn(2);
+        lenient().when(indexerRpcProfile.effectiveCatchupBoostEnabled()).thenReturn(true);
+
+        RpcProviderConfig rpcProviderConfig = new RpcProviderConfig(RpcProviderType.PUBLIC, 2, 50, 3000L);
+        AdaptiveBackpressureController backpressure = new AdaptiveBackpressureController(indexerRpcProfile);
+        RpcConcurrencyGovernor rpcConcurrencyGovernor = new RpcConcurrencyGovernor(backpressure, indexerRpcProfile);
+        baseBlockSource = new BaseBlockSource(web3j, syncStatusRepository, transactionPipe, rpcProviderConfig,
+                rpcConcurrencyGovernor, backpressure, indexerRpcProfile, flywayProvider);
+    }
+
+    /** ID=1 protocol: checkpoint row used by {@code initializeLastScannedBlock} / {@code resolveStartBlock}. */
+    private static SyncStatus id1Status(long lastScannedBlock) {
+        SyncStatus s = new SyncStatus();
+        s.setId(1L);
+        s.setLastScannedBlock(lastScannedBlock);
+        return s;
     }
     
     @Test
@@ -145,23 +168,22 @@ class BaseBlockSourceTest {
         doReturn(mockEthBlockNumber).when(mockBlockNumberRequest).send();
         when(mockEthBlockNumber.getBlockNumber()).thenReturn(currentBlockNumber);
         
-        SyncStatus syncStatus = new SyncStatus();
-        syncStatus.setLastScannedBlock(lastScannedBlock.longValue());
-        
-        when(syncStatusRepository.findFirstByOrderByIdDesc()).thenReturn(Optional.of(syncStatus));
-        
+        when(syncStatusRepository.findById(1L)).thenReturn(Optional.of(id1Status(lastScannedBlock.longValue())));
+        lenient().when(syncStatusRepository.save(any(SyncStatus.class))).thenAnswer(inv -> inv.getArgument(0));
+
         // Initialize last scanned block
         baseBlockSource.initializeLastScannedBlock();
-        
+
         // When
         long[] blockRange = baseBlockSource.getBlockRangeToProcess();
-        
+
         // Then
         assertThat(blockRange).hasSize(2);
         assertThat(blockRange[0]).isEqualTo(999951); // First unscanned block
-        assertThat(blockRange[1]).isEqualTo(1000000); // Current block
+        // Range is capped by max-batch-size, but must never exceed current chain head.
+        assertThat(blockRange[1]).isEqualTo(1000000L);
         verify(web3j, times(1)).ethBlockNumber(); // Called once for range
-        verify(syncStatusRepository, times(1)).findFirstByOrderByIdDesc();
+        verify(syncStatusRepository, atLeastOnce()).findById(1L);
     }
     
     @Test
@@ -176,21 +198,19 @@ class BaseBlockSourceTest {
         doReturn(mockEthBlockNumber).when(mockBlockNumberRequest).send();
         when(mockEthBlockNumber.getBlockNumber()).thenReturn(currentBlockNumber);
         
-        SyncStatus syncStatus = new SyncStatus();
-        syncStatus.setLastScannedBlock(lastScannedBlock.longValue());
-        
-        when(syncStatusRepository.findFirstByOrderByIdDesc()).thenReturn(Optional.of(syncStatus));
-        
+        when(syncStatusRepository.findById(1L)).thenReturn(Optional.of(id1Status(lastScannedBlock.longValue())));
+        lenient().when(syncStatusRepository.save(any(SyncStatus.class))).thenAnswer(inv -> inv.getArgument(0));
+
         // Initialize last scanned block
         baseBlockSource.initializeLastScannedBlock();
-        
+
         // When
         long[] blockRange = baseBlockSource.getBlockRangeToProcess();
-        
+
         // Then
         assertThat(blockRange).isEmpty(); // No blocks to process
         verify(web3j, times(1)).ethBlockNumber(); // Called once for range
-        verify(syncStatusRepository, times(1)).findFirstByOrderByIdDesc();
+        verify(syncStatusRepository, atLeastOnce()).findById(1L);
     }
     
     @Test
@@ -200,47 +220,45 @@ class BaseBlockSourceTest {
         BigInteger blockNumber = BigInteger.valueOf(123456);
         EthBlock.Block mockBlock = mock(EthBlock.Block.class);
         
-        // Use doReturn pattern for ethGetBlockByNumber
+        // Production path uses synchronous Request.send() inside a virtual-thread CompletableFuture
         doReturn(mockBlockRequest).when(web3j).ethGetBlockByNumber(any(), anyBoolean());
-        when(mockBlockRequest.sendAsync()).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(mockEthBlock));
+        when(mockBlockRequest.send()).thenReturn(mockEthBlock);
         when(mockEthBlock.getBlock()).thenReturn(mockBlock);
         when(mockBlock.getNumber()).thenReturn(blockNumber);
-        
+
         // When
         EthBlock.Block actualBlock = baseBlockSource.fetchBlock(blockNumber.longValue());
-        
+
         // Then
         assertThat(actualBlock).isNotNull();
         assertThat(actualBlock.getNumber()).isEqualTo(blockNumber);
         verify(web3j, times(1)).ethGetBlockByNumber(any(), anyBoolean());
-        verify(mockBlockRequest, times(1)).sendAsync();
-        verify(mockEthBlock, times(1)).getBlock();
+        verify(mockBlockRequest, times(1)).send();
+        // Null-guard and return path each call getBlock() once
+        verify(mockEthBlock, times(2)).getBlock();
         verify(mockBlock, times(1)).getNumber();
     }
     
     @Test
-    @DisplayName("Should throw exception when block fetch fails after retries")
-    void shouldThrowExceptionWhenBlockFetchFailsAfterRetries() throws Exception {
+    @DisplayName("Should soft-fail (return null) when rate-limited after retries")
+    void shouldSoftFailWhenBlockFetchIsRateLimitedAfterRetries() throws Exception {
         // Given
         BigInteger blockNumber = BigInteger.valueOf(123456);
         
-        // Use doReturn pattern
         doReturn(mockBlockRequest).when(web3j).ethGetBlockByNumber(any(), anyBoolean());
-        
-        // Configure request to fail 5 times (exhaust retries)
-        when(mockBlockRequest.sendAsync())
+
+        when(mockBlockRequest.send())
             .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"))
             .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"))
             .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"))
             .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"))
             .thenThrow(new ClientConnectionException("HTTP 429 Too Many Requests"));
-        
-        // When & Then
-        assertThrows(RuntimeException.class, () -> {
-            baseBlockSource.fetchBlock(blockNumber.longValue());
-        });
-        verify(web3j, times(5)).ethGetBlockByNumber(any(), anyBoolean()); // Exhaust all retries
-        verify(mockBlockRequest, times(5)).sendAsync();
+
+        // Rate-limit is treated as a soft failure: BaseBlockSource returns null so orchestrator can hold position.
+        EthBlock.Block block = baseBlockSource.fetchBlock(blockNumber.longValue());
+        assertThat(block).isNull();
+        verify(web3j, atLeastOnce()).ethGetBlockByNumber(any(), anyBoolean());
+        verify(mockBlockRequest, atLeastOnce()).send();
     }
     
     @Test
@@ -378,21 +396,19 @@ class BaseBlockSourceTest {
         doReturn(mockEthBlockNumber).when(mockBlockNumberRequest).send();
         when(mockEthBlockNumber.getBlockNumber()).thenReturn(currentBlockNumber);
         
-        SyncStatus syncStatus = new SyncStatus();
-        syncStatus.setLastScannedBlock(lastScannedBlock.longValue());
-        
-        when(syncStatusRepository.findFirstByOrderByIdDesc()).thenReturn(Optional.of(syncStatus));
-        
+        when(syncStatusRepository.findById(1L)).thenReturn(Optional.of(id1Status(lastScannedBlock.longValue())));
+        lenient().when(syncStatusRepository.save(any(SyncStatus.class))).thenAnswer(inv -> inv.getArgument(0));
+
         // Initialize last scanned block
         baseBlockSource.initializeLastScannedBlock();
-        
+
         // When
         boolean hasNewBlocks = baseBlockSource.hasNewBlocks();
-        
+
         // Then
         assertThat(hasNewBlocks).isTrue();
         verify(web3j, times(1)).ethBlockNumber(); // Called once for check
-        verify(syncStatusRepository, times(1)).findFirstByOrderByIdDesc();
+        verify(syncStatusRepository, atLeastOnce()).findById(1L);
     }
     
     /**

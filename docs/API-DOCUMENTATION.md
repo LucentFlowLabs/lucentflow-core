@@ -27,9 +27,17 @@ http://localhost:8080/swagger-ui/index.html
 
 #### GET /actuator/health
 
-**Description:** Primary system health verification endpoint for uptime monitoring and load balancer health checks.
+**Description:** Primary system health verification endpoint for uptime monitoring and load balancer health checks. As of **v1.1.0-STABLE**, the aggregate status incorporates **JSON-RPC reachability** via `JsonRpcHealthIndicator`: operators can tell **database-up** from **RPC-up** without a separate probe.
 
-**Response:**
+**Contributors (representative):**
+
+| Component | Meaning |
+|-----------|---------|
+| `db` | PostgreSQL pool / connectivity |
+| `jsonRpc` | `eth_blockNumber` against the configured Web3j endpoint (`rpc`: `reachable` \| `error` \| `unreachable`; optional `blockNumber` when UP) |
+| `diskSpace` | Host disk threshold (when enabled) |
+
+**Response (illustrative):**
 ```json
 {
   "status": "UP",
@@ -39,6 +47,13 @@ http://localhost:8080/swagger-ui/index.html
       "details": {
         "database": "PostgreSQL",
         "validationQuery": "isValid()"
+      }
+    },
+    "jsonRpc": {
+      "status": "UP",
+      "details": {
+        "rpc": "reachable",
+        "blockNumber": "0x1234abcd"
       }
     },
     "diskSpace": {
@@ -53,6 +68,8 @@ http://localhost:8080/swagger-ui/index.html
 }
 ```
 
+If the RPC endpoint is down or times out, `jsonRpc` reports **DOWN** with `rpc` / `error` / `message` details, which typically drives the **overall** status to **DOWN**—useful for catching misconfigured `LUCENTFLOW_CHAIN_RPC_URL` before traffic is admitted.
+
 **Usage:**
 ```bash
 curl http://localhost:8080/actuator/health
@@ -66,32 +83,37 @@ curl http://localhost:8080/actuator/health
 
 **Description:** Retrieve current blockchain synchronization status including last scanned block and pipeline state.
 
-**Response Fields:**
-- `lastScannedBlock`: Latest block number successfully indexed
-- `syncStatus`: Current synchronization state (ACTIVE, PAUSED, ERROR)
-- `createdAt`: Timestamp when sync status was last updated
-- `updatedAt`: Timestamp of last status change
-- `blocksBehind`: Number of blocks behind chain tip (if applicable)
+**Response Fields (ID=1 Protocol):**
+- `lastScannedBlock`: Latest block number successfully indexed (`0` when not started)
+- `syncStatus`: `ACTIVE` when row **id=1** exists in `sync_status`, otherwise `NOT_STARTED`
+- `createdAt` / `updatedAt`: Row timestamps from `sync_status` (nullable when not started)
 
 **Example Request:**
 ```bash
 curl "http://localhost:8080/api/v1/sync-status"
 ```
 
-**Response Format:**
+**Response Format (indexed):**
 ```json
 {
   "lastScannedBlock": 43213473,
   "createdAt": "2024-03-17T03:06:58.769Z",
   "updatedAt": "2024-03-17T03:07:00.483Z",
-  "syncStatus": "ACTIVE",
-  "blocksBehind": 0,
-  "chainTip": 43213473,
-  "pipelineState": "PROCESSING_BLOCKS"
+  "syncStatus": "ACTIVE"
 }
 ```
 
-**Pipeline Safety:** The synchronization includes a safe buffer to handle L2 chain reorganizations. The `lastScannedBlock` may be slightly behind the current chain tip to ensure data consistency during network reorganizations.
+**Response Format (no sync row yet):**
+```json
+{
+  "lastScannedBlock": 0,
+  "createdAt": null,
+  "updatedAt": null,
+  "syncStatus": "NOT_STARTED"
+}
+```
+
+**Note:** Chain tip, block lag, and pipeline state are exposed via **Metabase / operational SQL** (see `docs/metabase.md` and `INFRASTRUCTURE.md`), not this minimal JSON contract.
 
 ---
 
@@ -118,7 +140,8 @@ curl "http://localhost:8080/api/v1/whales?minEth=50.0"
 curl "http://localhost:8080/api/v1/whales?page=1&size=10"
 ```
 
-**Response Format:**
+**Response Format:** Spring `Page<WhaleTransaction>` JSON. Monetary fields use numeric JSON for `BigDecimal` / `BigInteger` per Jackson defaults; clients should parse **`valueEth`** as a fixed-scale decimal string in application logic.
+
 ```json
 {
   "content": [
@@ -127,19 +150,28 @@ curl "http://localhost:8080/api/v1/whales?page=1&size=10"
       "hash": "0x2eac0688d67bb7a488b5b1dc734cedf5c4b04c588f69fbc12231061c12254921",
       "fromAddress": "0x742d35Cc6634C0532925a3b844Bc9e2292D828",
       "toAddress": "0x1234567890123456789012345678901234567890",
-      "valueEth": "150.500000000000000000",
-      "valueUsd": "450750.00",
+      "valueEth": 150.500000000000000000,
       "blockNumber": 43213474,
       "timestamp": "2024-03-17T03:04:13.501Z",
-      "gasUsed": "21000",
-      "gasPrice": "0.020000000000000020",
+      "isContractCreation": false,
+      "gasPrice": "20000000000",
+      "gasLimit": "21000",
+      "gasCostEth": 0.000000000000000001,
       "transactionType": "REGULAR_TRANSFER",
       "fromAddressTag": "UNKNOWN",
       "toAddressTag": "Coinbase Proxy",
       "whaleCategory": "MEGA_WHALE",
       "addressTag": "UNKNOWN",
       "transactionCategory": "EXCHANGE",
-      "isContractCreation": false,
+      "fundingSourceAddress": null,
+      "fundingSourceTag": null,
+      "rugRiskLevel": "LOW",
+      "riskScore": 10,
+      "riskReasons": null,
+      "executionStatus": null,
+      "bytecodeHash": null,
+      "tokenSymbol": null,
+      "tokenAddress": null,
       "createdAt": "2024-03-17T03:04:13.501Z",
       "updatedAt": "2024-03-17T03:04:13.501Z"
     }
@@ -179,7 +211,8 @@ curl "http://localhost:8080/api/v1/whales?page=1&size=10"
 curl "http://localhost:8080/api/v1/whales/stats"
 ```
 
-**Response Format:**
+**Response Format:** Flat map produced by `WhaleQueryController#getWhaleStatistics`. The **`largestWhaleTransaction`** object is **omitted** when the table is empty.
+
 ```json
 {
   "totalWhaleTransactions": 150,
@@ -187,24 +220,24 @@ curl "http://localhost:8080/api/v1/whales/stats"
   "lastUpdated": 1704110400000,
   "largestWhaleTransaction": {
     "hash": "0xabc123def4567890123456789012345678901234567890",
-    "valueEth": "2500.000000000000000000",
-    "valueUsd": "7500000.00",
+    "valueEth": 2500.000000000000000000,
     "fromAddress": "0xdef4567890123456789012345678901234567890",
     "toAddress": "0x1234567890123456789012345678901234567890",
     "timestamp": "2024-03-17T03:00:00.000Z"
-  },
-  "whaleCategories": {
-    "WHALE": 45,
-    "MEGA_WHALE": 12,
-    "GIGA_WHALE": 8,
-    "FRESH_WHALE": 5
-  },
-  "averageTransactionValue": {
-    "eth": "85.250000000000000000",
-    "usd": "255750.00"
   }
 }
 ```
+
+---
+
+### 5. Tag Oracle (institutional labels)
+
+There is **no** dedicated REST controller for the Tag Oracle in **v1.1.0**. Labels are **sovereign, local-first** data:
+
+- **Storage:** `entity_tags` (see Flyway migrations) holds canonical **address → label** rows used by **`TagOracleService`** in the analyzer.
+- **API surfacing:** Resolved tags appear on whale payloads as **`fromAddressTag`**, **`toAddressTag`**, **`addressTag`**, and related fields on **`GET /api/v1/whales`** when the pipeline has enriched the row.
+- **Scale:** Full-scale deployments often maintain **hundreds** of institutional labels (700+ is typical for curated forensics datasets). **Row count is deployment-dependent** (Flyway seeds + operator imports); do not assume a fixed catalog size from the API alone.
+- **Ad-hoc inspection:** Operators may query PostgreSQL directly, e.g. `SELECT address, tag_name, category FROM entity_tags ORDER BY tag_name LIMIT 50;`, or attach Metabase for governance workflows.
 
 ---
 
@@ -212,13 +245,12 @@ curl "http://localhost:8080/api/v1/whales/stats"
 
 ### Cryptocurrency Value Handling
 
-**Critical Requirement:** All blockchain monetary values are returned as strings to prevent IEEE 754 floating-point precision errors.
+**Critical Requirement:** Treat monetary fields as **decimal-safe** end to end. Jackson typically serializes JPA **`BigDecimal`** fields (e.g. **`valueEth`**, **`gasCostEth`**) as JSON **numbers**; never use raw `double` arithmetic in clients.
 
 **valueEth Field Format:**
-- **Type**: String representation of 18-decimal precision value
-- **Example**: `"150.500000000000000000"` for 150.5 ETH
-- **Precision**: Always 18 decimal places for ETH values
-- **Client Handling**: Use `BigDecimal` (Java) or `BigNumber.js` (JavaScript)
+- **Semantics**: 18-decimal-scale ETH amount (schema `precision=38, scale=18`)
+- **Example**: `150.500000000000000000` (JSON number) or an equivalent string form if you configure Jackson otherwise
+- **Client Handling**: Use `BigDecimal` (Java) or `BigNumber.js` (JavaScript) — **parse from string** if your client receives quoted decimals
 
 **Recommended Client Implementation:**
 
@@ -356,16 +388,15 @@ const displayValue = ethValue.div(new BigNumber('10').pow(18)).toFixed(4);
 
 ## Pagination System
 
-### Standard Parameters
-
-All list endpoints support consistent pagination:
+### Standard Parameters (`GET /api/v1/whales`)
 
 | Parameter | Type | Default | Max | Description |
 |-----------|-------|---------|-----|-------------|
-| `page` | integer | 0 | - | Page number (0-based) |
-| `size` | integer | 20 | 100 | Items per page |
-| `sort` | string | timestamp | - | Sort field |
-| `order` | string | desc | asc/desc | Sort direction |
+| `page` | integer | 0 | — | Page number (0-based) |
+| `size` | integer | 20 | 100 | Items per page (values above 100 are clamped to 100) |
+| `minEth` | decimal | — | — | Optional minimum **`valueEth`** filter |
+
+Sorting is **fixed** server-side: **`timestamp` descending** (newest first). There is no `sort` / `order` query parameter on this controller.
 
 ### Pagination Response Structure
 

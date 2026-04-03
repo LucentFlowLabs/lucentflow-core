@@ -4,6 +4,7 @@ import okhttp3.ConnectionPool;
 import okhttp3.Dispatcher;
 import okhttp3.OkHttpClient;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -12,11 +13,12 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.web3j.protocol.Web3j;
 import org.web3j.protocol.http.HttpService;
 
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.time.Duration;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import jakarta.annotation.PreDestroy;
 
@@ -118,7 +120,15 @@ public class Web3jAutoConfiguration {
      * @return configured OkHttpClient
      */
     @Bean
-    public OkHttpClient okHttpClient() {
+    public RpcEndpointState rpcEndpointState(Web3jProperties web3jProperties) {
+        return new RpcEndpointState(web3jProperties.getRpcUrl(), web3jProperties.getRpcBackupUrl());
+    }
+
+    @Bean
+    public OkHttpClient okHttpClient(
+            @Value("${PROXY_HOST:}") String proxyHost,
+            @Value("${PROXY_PORT:}") String proxyPort,
+            RpcEndpointState rpcEndpointState) {
         // DISABLED: HttpLoggingInterceptor causes I/O backpressure and deadlocks during high-frequency scanning
         // HttpLoggingInterceptor loggingInterceptor = new HttpLoggingInterceptor();
         // loggingInterceptor.setLevel(HttpLoggingInterceptor.Level.BASIC);
@@ -131,16 +141,35 @@ public class Web3jAutoConfiguration {
         // Configure connection pool
         ConnectionPool connectionPool = new ConnectionPool(50, 5, TimeUnit.MINUTES);
 
-        return new OkHttpClient.Builder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .readTimeout(Duration.ofSeconds(30))
+        OkHttpClient.Builder builder = new OkHttpClient.Builder()
+                .addInterceptor(new RpcFailoverInterceptor(rpcEndpointState))
+                .connectTimeout(Duration.ofSeconds(30))
+                .readTimeout(Duration.ofSeconds(90))
                 .writeTimeout(Duration.ofSeconds(30))
-                .callTimeout(Duration.ofSeconds(60))
+                .callTimeout(Duration.ofSeconds(120))
                 .connectionPool(connectionPool)
                 .dispatcher(dispatcher)
-                .retryOnConnectionFailure(true)
-                // DISABLED: .addInterceptor(loggingInterceptor)
-                .build();
+                .retryOnConnectionFailure(true);
+
+        if (proxyHost != null && !proxyHost.isBlank() && proxyPort != null && !proxyPort.isBlank()) {
+            try {
+                int port = Integer.parseInt(proxyPort.trim());
+                String host = proxyHost.trim();
+                builder.proxy(new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port)));
+                log.info("[HTTP-CLIENT] Outbound HTTP proxy enabled: {}:{}", host, port);
+                if (isLoopbackProxyHost(host)) {
+                    log.warn(
+                            "[HTTP-CLIENT] PROXY_HOST is loopback ({}). In Docker containers 127.0.0.1/localhost is the container, "
+                                    + "not your host VPN — RPC will fail with 'Failed to connect to /127.0.0.1:...'. "
+                                    + "Use host.docker.internal (Docker Desktop) or unset PROXY_* if direct egress works.",
+                            host);
+                }
+            } catch (NumberFormatException e) {
+                log.warn("[HTTP-CLIENT] Invalid PROXY_PORT '{}', proxy disabled.", proxyPort);
+            }
+        }
+
+        return builder.build();
     }
 
     /**
@@ -164,11 +193,40 @@ public class Web3jAutoConfiguration {
     }
 
     /**
+     * Smart dual-channel RPC: derives semaphore permits, pipeline chunk size, and inter-batch sleep
+     * from the configured endpoint URL (professional vs public).
+     *
+     * @param properties bound {@code lucentflow.chain} properties (including {@code rpc-url})
+     * @return immutable recommended limits for indexer components
+     */
+    @Bean
+    public RpcProviderConfig rpcProviderConfig(
+            Web3jProperties properties,
+            @Value("${lucentflow.chain.professional-inter-batch-sleep-ms:2000}") long professionalInterBatchSleepMs) {
+        RpcProviderType type = RpcProviderType.fromRpcUrl(properties.getRpcUrl());
+        long proSleep = Math.max(0L, professionalInterBatchSleepMs);
+        // Alchemy / QuickNode / Infura / BlastAPI: conservative free-tier throttling.
+        return switch (type) {
+            // Professional endpoints: 8 permits is the Alchemy Free-Tier sweet spot
+            // (330 CUPS budget / ~40 CUPS per block = safe ceiling for sustained syncs).
+            // Inter-batch delay is tunable via lucentflow.chain.professional-inter-batch-sleep-ms (default 2000ms).
+            case PROFESSIONAL -> new RpcProviderConfig(type, 8, 100, proSleep);
+            case PUBLIC -> new RpcProviderConfig(type, 2, 50, 3000L);
+        };
+    }
+
+    private static boolean isLoopbackProxyHost(String host) {
+        return "127.0.0.1".equals(host) || "::1".equals(host) || "localhost".equalsIgnoreCase(host);
+    }
+
+    /**
      * Configuration properties for Web3j connection settings.
      */
     @ConfigurationProperties(prefix = "lucentflow.chain")
     public static class Web3jProperties {
         private String rpcUrl;
+        /** Fallback JSON-RPC URL when primary returns 4xx/5xx or I/O failure (5-minute cooldown). */
+        private String rpcBackupUrl = "https://mainnet.base.org";
 
         public String getRpcUrl() {
             return rpcUrl;
@@ -176,6 +234,14 @@ public class Web3jAutoConfiguration {
 
         public void setRpcUrl(String rpcUrl) {
             this.rpcUrl = rpcUrl;
+        }
+
+        public String getRpcBackupUrl() {
+            return rpcBackupUrl;
+        }
+
+        public void setRpcBackupUrl(String rpcBackupUrl) {
+            this.rpcBackupUrl = rpcBackupUrl;
         }
     }
 }

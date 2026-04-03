@@ -1,3 +1,9 @@
+<!--
+  LucentFlow Infrastructure Architecture (operator reference).
+  @author ArchLucent
+  @since 1.0
+-->
+
 # LucentFlow Infrastructure Architecture
 
 ## 🏗️ Docker-First Private Deployment
@@ -192,6 +198,19 @@ docker compose logs -f lucentflow-api | grep health
 
 ---
 
+## ✅ Deterministic Resume: ID 1 Checkpoint Protocol
+LucentFlow uses a deterministic checkpoint strategy to eliminate redundant scanning and guarantee safe resumes:
+
+- The `sync_status` table stores ingestion progress and heartbeat metrics.
+- **ID 1 Protocol**: the row with `id = 1` is the single source of truth for resume state.
+- On startup / scan scheduling:
+  - If `sync_status.id=1.last_scanned_block > 0`, the indexer resumes from `last_scanned_block + 1`.
+  - If the row is missing or `last_scanned_block = 0` (sentinel), the indexer falls back to `LUCENTFLOW_INDEXER_START_BLOCK` (first boot only), otherwise `latest - 10`.
+
+This protocol ensures the pipeline can restart deterministically without re-indexing large ranges, while still allowing an explicit first-boot checkpoint via `.env`.
+
+---
+
 ## 🛡️ Security Hardening
 
 ### Container Security Model
@@ -232,18 +251,43 @@ networks:
 
 ## ⚡ Performance Architecture
 
-### JVM Optimization (Java 21)
+### JVM Optimization (Java 21) — v1.1.0 requirement
+
+**Generational ZGC** is the **baseline** for LucentFlow **v1.1.0-STABLE** long-running processes (indexer + analyzer colocated). The generational mode targets **sub-millisecond** pause times on healthy heaps by separating young vs. old collection, while **ZGC** retains its throughput-friendly footprint for I/O-heavy virtual-thread workloads.
 
 ```bash
-# Production-ready JVM flags
+# Production-ready JVM flags (v1.1.0)
 JAVA_OPTS="-XX:+UseZGC -XX:+ZGenerational -Xms512m -Xmx2g"
 
 # Breakdown:
 -XX:+UseZGC              # Low-latency garbage collector
--XX:+ZGenerational         # Generational ZGC for better throughput
--Xms512m                  # Initial heap size
--Xmx2g                    # Maximum heap size
+-XX:+ZGenerational       # Generational ZGC — required baseline for v1.1.0 pause targets
+-Xms512m                 # Initial heap size
+-Xmx2g                   # Maximum heap size
 ```
+
+Operators running **without** `-XX:+ZGenerational` should treat configuration as **unsupported** for latency-sensitive forensic pipelines.
+
+---
+
+### Dual-pacing strategy (SAFE_PUBLIC_POLICY vs PROFESSIONAL_OVERRIDE)
+
+LucentFlow separates **shared public infrastructure** from **dedicated professional endpoints**:
+
+| Mode | When | Behavior |
+|------|------|----------|
+| **SAFE_PUBLIC_POLICY** | `LUCENTFLOW_CHAIN_RPC_URL` resolves to the **official** Base mainnet host (`mainnet.base.org`), **or** HTTP failover lands on that host | **Hardcoded** safe batch, concurrency, and scan interval—**.env cannot override** indexer pacing. Protects sovereign, community-shared RPC capacity. |
+| **PROFESSIONAL_OVERRIDE** | Primary URL is **not** the official host (Alchemy, QuickNode, Infura, BlastAPI, Ankr, …) and **not** forced into public-safe mode | **Optional** `.env` tuning: `LUCENTFLOW_INDEXER_MAX_BATCH_SIZE`, `LUCENTFLOW_INDEXER_MAX_CONCURRENCY`, `LUCENTFLOW_CHAIN_PROFESSIONAL_INTER_BATCH_SLEEP_MS`, cooldown knobs, etc. |
+
+This **dual-pacing** model is **policy-as-code**: sovereignty means never accidentally hammering public nodes, while still unlocking throughput on infrastructure you pay for.
+
+---
+
+### Failover & automatic downgrade to public pacing
+
+OkHttp **failover** (`LUCENTFLOW_CHAIN_RPC_BACKUP_URL`) triggers on **transport failures** and **HTTP errors other than 429** (see `RpcFailoverInterceptor`). When the **backup** URL is `mainnet.base.org`, **`IndexerRpcProfile`** forces **SAFE_PUBLIC_POLICY** pacing for the duration of the failover window—**regardless** of professional `.env`—so the shared endpoint is never subjected to Alchemy-grade concurrency.
+
+**HTTP 429** is **not** treated as failover: it signals **rate-limit backoff** (governor + scheduler), preserving endpoint stability without flapping between hosts.
 
 ### Database Connection Pooling
 
@@ -264,6 +308,40 @@ spring:
 - **I/O Optimization**: Massive concurrent request handling
 - **Memory Efficiency**: Minimal thread stack overhead
 - **Throughput**: 300%+ improvement over traditional threading
+
+---
+
+## 🚦 Performance Tuning (Professional tiers & CUPS)
+On **PROFESSIONAL_OVERRIDE** URLs, tune **`LUCENTFLOW_INDEXER_*`** and **`LUCENTFLOW_CHAIN_PROFESSIONAL_INTER_BATCH_SLEEP_MS`** in `.env` to match your provider’s **CUPS** / rate limits. The **`RpcConcurrencyGovernor`** applies **semaphore-style** fairness with optional catch-up boost (usually **disabled** on free tiers).
+
+**Official public RPC** ignores these knobs—**SAFE_PUBLIC_POLICY** applies fixed safe defaults.
+
+Start conservative (e.g. low concurrency, longer inter-batch sleep), then increase while watching logs for **429** soft-fail patterns.
+
+Receipt strategy (intelligence-first):
+- Receipt calls are expensive (CUPS). The pipeline only fetches receipts when needed (contract creation, high-value calls, or core-token candidates) to preserve forensics while keeping throughput stable.
+
+---
+
+## 🌐 Networking: JSON-RPC Auto-Failover (5-Minute Backup Window)
+LucentFlow provides high availability for JSON-RPC via OkHttp:
+
+- `RpcFailoverInterceptor` rewrites outgoing requests to the current endpoint selected by `RpcEndpointState`.
+- **Trigger conditions** (failover to backup):
+  - **HTTP 4xx/5xx** responses **except 429** (rate limits are **not** failover—see adaptive backoff)
+  - **I/O failures** (timeouts, connection resets)
+- After a trigger, the client routes traffic to `LUCENTFLOW_CHAIN_RPC_BACKUP_URL` for **5 minutes**, then automatically attempts the primary again.
+
+This design prevents transient vendor issues from stalling ingestion while **avoiding flapping** on throttle signals (429).
+
+---
+
+## 📡 Observability: System Heartbeat (Block Lag Dashboard)
+LucentFlow exposes real-time system health metrics via `sync_status` (ID 1 Protocol) and a dedicated Metabase dashboard component:
+
+- **Sync Pulse / Block Lag**: `block_lag`, `blocks_per_second`, `last_scanned_block`, `chain_head_block`, `updated_at`
+
+See `docs/metabase.md` for the exact SQL queries and visualization specifications used in production dashboards.
 
 ---
 
@@ -367,7 +445,7 @@ mvn clean install -DskipTests
 
 # Step 3: Run with local profile
 java "-Dspring.profiles.active=local" \
-     -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
+     -jar lucentflow-api/target/lucentflow-api.jar
 ```
 
 ### Full Docker Development

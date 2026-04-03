@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class TransactionPipe {
     
     // T10 Standard: Always use bounded queues to prevent OOM
-    private static final int QUEUE_CAPACITY = 2048;
+    private static final int QUEUE_CAPACITY = 5000;
     private final BlockingQueue<Transaction> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
     
     private final AtomicLong totalProcessed = new AtomicLong(0);

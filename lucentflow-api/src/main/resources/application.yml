@@ -14,16 +14,17 @@ spring:
       maximum-pool-size: 20
       minimum-idle: 5
       idle-timeout: 300000
-      max-lifetime: 1200000
-      connection-timeout: 30000
+      max-lifetime: 600000
+      keepalive-time: 30000
+      connection-timeout: 60000
       initialization-fail-timeout: 60000
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: none
     show-sql: false
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
         jdbc:
           batch_size: 50
@@ -44,10 +45,20 @@ spring:
 
 lucentflow:
   chain:
+    # Default Base public RPC; set LUCENTFLOW_CHAIN_RPC_URL for Alchemy / QuickNode / Infura / BlastAPI (professional tier)
     rpc-url: ${LUCENTFLOW_CHAIN_RPC_URL:https://mainnet.base.org}
+    # Failover JSON-RPC when primary returns 4xx/5xx (except 429) or I/O errors (5-minute backup window via OkHttp interceptor)
+    rpc-backup-url: ${LUCENTFLOW_CHAIN_RPC_BACKUP_URL:https://mainnet.base.org}
+    # PROFESSIONAL tier only: sleep between 100-block checkpoint chunks (orchestrator uses max(this, 500ms)). Lower = faster, more 429 risk.
+    professional-inter-batch-sleep-ms: ${LUCENTFLOW_CHAIN_PROFESSIONAL_INTER_BATCH_SLEEP_MS:2000}
   basescan:
-    api-key: ${BASESCAN_API_KEY}
-    base-url: ${BASESCAN_BASE_URL:https://api.basescan.org/api}
+    api-key: ${BASESCAN_API_KEY:}
+    base-url: ${BASESCAN_BASE_URL:https://api-v2.basescan.org/api}
+  indexer:
+    start-block: ${LUCENTFLOW_INDEXER_START_BLOCK:}
+  telegram:
+    bot-token: ${TELEGRAM_BOT_TOKEN:}
+    chat-id: ${TELEGRAM_CHAT_ID:}
 
 logging:
   file:

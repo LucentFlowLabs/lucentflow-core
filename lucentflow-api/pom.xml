@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.lucentflow</groupId>
         <artifactId>lucentflow-parent</artifactId>
-        <version>1.0.0-RELEASE</version>
+        <version>${revision}</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
     <artifactId>lucentflow-api</artifactId>
@@ -25,6 +25,11 @@
         <dependency>
             <groupId>com.lucentflow</groupId>
             <artifactId>lucentflow-indexer</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.lucentflow</groupId>
+            <artifactId>lucentflow-analyzer</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -69,6 +74,7 @@
     </dependencies>
 
     <build>
+        <finalName>lucentflow-api</finalName>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
@@ -78,6 +84,27 @@
                         <goals>
                             <goal>repackage</goal>
                         </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>copy-fat-jar-to-repo-root</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <copy file="${project.build.directory}/${project.build.finalName}.jar"
+                                      tofile="${project.basedir}/../lucentflow.jar"
+                                      overwrite="true"/>
+                            </target>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>

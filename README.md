@@ -1,175 +1,151 @@
-# LucentFlow Core (v1.0.0)
+<!--
+  LucentFlow project overview — v1.1.0-STABLE
+  @author ArchLucent
+  @since 1.1
+-->
 
- ![Java 21](https://img.shields.io/badge/Java-21-orange?style=flat&logo=java)
- ![Spring Boot 3.4](https://img.shields.io/badge/Spring%20Boot-3.4-brightgreen?style=flat&logo=spring-boot)
+```text
+  __    _                            ______              
+ / /   (_)___  _____________  ____ _/ ____/___  _____    
+/ /   / / __ \/ ___/ ___/ _ \/ __ `/ /_  / __ \/ ___/    
+/ /___/ / /_/ / /__/ /  /  __/ /_/ / __/ / /_/ / /__      
+/_____/_/ .___/\___/_/   \___/\__, /_/    \____/\___/     
+       /_/                  /____/                        
+```
+
+# LucentFlow · v1.1.0-STABLE
+
+**High-Performance Sovereign Asset Security & Forensic OS for Base L2**
+
+![Java 21](https://img.shields.io/badge/Java-21-orange?style=flat&logo=java)
+![Spring Boot 3.4](https://img.shields.io/badge/Spring%20Boot-3.4-brightgreen?style=flat&logo=spring-boot)
 ![Base L2](https://img.shields.io/badge/Base-L2-blue?style=flat)
-![Docker Ready](https://img.shields.io/badge/Docker-One--Click-blue?style=flat&logo=docker)
+![ZGC](https://img.shields.io/badge/GC-ZGC%20Generational-darkgreen?style=flat)
+![Virtual Threads](https://img.shields.io/badge/Threads-Virtual%20(Loom)-purple?style=flat)
+![Version](https://img.shields.io/badge/Version-1.1.0--STABLE-blue?style=flat)
 
-
-
-> **"Self-Custody means Self-Auditing."**  
-> High-performance Base (L2) network monitoring and asset security auditing engine. Built for transparency, privacy, and industrial-grade reliability.
-
----
-
-## 🌟 Core Pillars
-1. **Whale Sentinel**: Real-time tracking of 10+ ETH movements with precise L1 Data Fee & L2 Execution Fee estimation.
-2. **Genesis Tracer**: Deep-recursive funding source auditing. Trace any address back 3 levels (Nonce-0) to identify links to mixers or malicious deployers.
-3. **Anti-Rug Engine**: Automated risk scoring for contract creators based on seed funding reputation and historical deployment patterns on Base.
-
-## ⚡ Engineering & Security Excellence
-- **Triple Cross-Verification (TCV)**: Our crypto logic is mathematically proven through three layers:
-    - ✅ **Standard Vectors**: BIP-39 official test vector alignment.
-    - ✅ **Signature Recovery**: Mathematical loopback proof (`PrivKey -> Sign -> Recover == Addr`).
-    - ✅ **Clean-room Implementation**: Manual Keccak-256 address derivation bypassing high-level library abstractions.
-- **High-Performance Pipeline**: Virtual thread-based architecture achieving massive I/O throughput with minimal memory footprint.
-- **Base Oracle Integration**: Built-in 5s TTL cache for Base L2 GasPriceOracle to mitigate RPC rate-limiting.
+> **Sovereign infrastructure:** you own the stack, the keys, and the audit trail. LucentFlow is built for **resilience** under RPC pressure, **data sovereignty** on your hardware, and **high-throughput** forensic analysis—without sacrificing cryptographic rigor.
 
 ---
 
-## 📋 Prerequisites
+## Why LucentFlow
 
-### System Requirements
-- **Docker Engine**: 20.10+ with Docker Compose V2 (v2.20.0+)
-- **Operating System**: Linux, macOS, or Windows 10/11 with WSL2
-- **Memory**: Minimum 4GB RAM (8GB recommended)
-- **Disk**: 10GB free space for Docker images and data
-
-### Docker Compose V2 Installation
-
-**Docker Desktop (Recommended):**
-- Download Docker Desktop 4.25.0+ from https://www.docker.com/products/docker-desktop
-- Docker Compose V2 is included automatically
-
-**Standalone Installation:**
-```bash
-# Linux/macOS
-# 1. Create the directory for Docker CLI plugins
-mkdir -p ~/.docker/cli-plugins/
-
-# 2. Download the V2 binary into the plugin directory
-curl -SL https://github.com/docker/compose/releases/download/v2.20.0/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose
-
-# 3. Apply executable permissions
-chmod +x ~/.docker/cli-plugins/docker-compose
-
-# 4. Verify (Should return: Docker Compose version v2.20.0)
-docker compose version
-
-```
-
-**Upgrade from Docker Compose V1:**
-```bash
-# If you have docker-compose (V1), upgrade to V2
-docker compose version
-# If command not found, install Docker Desktop or standalone V2
-```
+LucentFlow is an industrial-grade sentinel for **Base L2**: it monitors whale-scale flows, scores creator risk, and traces funding origins with **recursive, evidence-grade forensics**. Version **1.1.0-STABLE** introduces an **Adaptive Environment Sensing Engine**—the runtime discovers configuration and proxies automatically so operators can ship faster with fewer footguns.
 
 ---
 
-## 🚀 One-Click Private Deployment (Full Docker)
+## Core Value Proposition (v1.1.0)
 
-<p align="center">
-  <img src="docs/images/dockerps.png" width="800" alt="Docker Operational Status">
-  <br>
-  <em>Figure 1: LucentFlow local cluster running in full-green healthy state.</em>
-</p>
+| Capability | What it delivers |
+|------------|------------------|
+| **Adaptive RPC pacing** | Intelligent behavior across **PROFESSIONAL** endpoints (Alchemy, QuickNode, Infura, BlastAPI, Ankr, …) and **PUBLIC** infrastructure (`mainnet.base.org`). Official public RPC uses **convention-over-configuration** safe defaults; non-official URLs unlock **optional** `.env` tuning. |
+| **Zero-config CLI** | A **mirrored fat JAR** at the repository root (`lucentflow.jar`) after `mvn package`, plus **multi-path `.env` discovery**—optimized for `java -jar` from the project root without a wall of `-D` flags. |
+| **Deep genesis trace** | **Three-layer** recursive funding analysis toward **nonce-zero** origins—**Anti-Rug 2.0** lineage: mixers, suspicious deployers, and seed funding reputation are surfaced as first-class signals. |
+| **Loom-powered indexer** | A **non-blocking** ingestion pipeline built on **Java 21 Virtual Threads**—parallel block work with bounded RPC fairness and adaptive backpressure. |
 
-Ideal for private auditors, institutional investors, and protocol teams. No local JDK/Maven required.
+---
 
-### Quick Start
+## The “Hardcore CLI” Quickstart
 
-#### 1. Initial Setup (Manual Option)
-If you prefer not to use our startup scripts, prepare your environment manually:
+Build once, run from the repo root. The loader merges `.env` files in **priority order** (first wins on duplicate keys) and applies **profile** and **proxy** intelligence before Spring Boot starts.
+
 ```bash
-cp lucentflow-deployment/docker/.env.example lucentflow-deployment/docker/.env
-# Edit .env to add your BASESCAN_API_KEY
+# Build & mirror fat JAR to ./lucentflow.jar
+mvn clean package
+
+# Configure (automatic .env discovery — copy template to project root)
+cp lucentflow-deployment/docker/.env.example .env
+
+# Run (adaptive proxy & profile sensing)
+java -jar lucentflow.jar
 ```
 
-#### 2. Automated Startup
+**Requirements:** `POSTGRES_PASSWORD` must be set (environment or merged `.env` property) before the JVM exits—this is intentional for **sovereign** deployments.
 
-**Linux/Mac:**
-```bash
-# Clone repository
-git clone https://github.com/LucentFlowLabs/lucentflow-core.git
-cd lucentflow-core
+---
 
-# Start infrastructure (auto-creates .env if missing, requires Docker Compose V2)
-./start-infrastructure.sh
-```
+## Environment & Proxy Intelligence
 
-**Windows:**
-```powershell
-# Clone repository
-git clone https://github.com/LucentFlowLabs/lucentflow-core.git
-cd lucentflow-core
+### Smart path discovery
 
-# Start infrastructure (auto-creates .env if missing, requires Docker Compose V2)
-.\start-infrastructure.ps1
-```
+The **Adaptive Environment Loader** searches for `.env` files relative to **`user.dir`** (typically your working directory), in order:
 
-### Full Docker Mode
+1. **`./.env`** — operator overrides at the repository root  
+2. **`./lucentflow-deployment/docker/.env`** — standard team template  
+3. **`../lucentflow-deployment/docker/.env`** — same template when running from a nested module directory  
 
-For complete Docker deployment (including application):
+Missing files are **ignored**; existing OS environment variables and JVM system properties are **not overwritten**—Kubernetes and Docker-injected secrets remain authoritative.
+
+### Transparent proxy mapping
+
+When present, **`PROXY_HOST`** and **`PROXY_PORT`** from `.env` are applied to **standard JVM HTTP(S) proxy system properties** (`http.proxyHost`, `https.proxyHost`, …) so Spring, OkHttp, and the JDK stack share one consistent view.
+
+**Local vs Docker:**  
+If the active profile is **`local`** and **`PROXY_HOST`** is `host.docker.internal` (a Docker Desktop convention), the engine **rewrites** it to **`127.0.0.1`** for bare-metal CLI runs—while container deployments can keep the original hostname when appropriate.
+
+---
+
+## Professional pacing (optional tuning)
+
+When **`LUCENTFLOW_CHAIN_RPC_URL`** points to a **non-official** host (not `mainnet.base.org`), you may tune throughput for paid tiers. **Examples** (see `.env.example` for the full contract):
+
+| Variable | Role |
+|----------|------|
+| `LUCENTFLOW_INDEXER_MAX_BATCH_SIZE` | Upper bound on block span per scan cycle (orchestrator still respects provider chunk caps). |
+| `LUCENTFLOW_INDEXER_MAX_CONCURRENCY` | Baseline RPC semaphore permits for parallel block work. |
+| `LUCENTFLOW_CHAIN_PROFESSIONAL_INTER_BATCH_SLEEP_MS` | Breathing room between checkpoint chunks on PROFESSIONAL URLs. |
+
+**Official public RPC** (`mainnet.base.org`) uses **fixed safe defaults** (batch, concurrency, interval) to protect shared infrastructure—**no accidental** `.env` hammering.
+
+---
+
+## Architecture blueprint
+
+- **Generational ZGC** — JVM tuned for **sub-millisecond** pause targets on long-lived indexer + analyzer workloads; generational ZGC reduces young-gen churn for streaming pipelines.  
+- **Virtual Threads (Java 21)** — I/O-bound RPC and async analysis scale with **structured concurrency** patterns without thread-pool explosion.  
+- **TCV (Triple Cross-Validation) for private keys** — cryptographic primitives are validated through **three independent proofs**: BIP-39 standard vectors, **sign → recover → address** loopback, and **clean-room** Keccak-256 address derivation alongside library paths—so **sovereign** key handling stays auditable.  
+- **JSON-RPC resilience** — OkHttp-backed failover to **`LUCENTFLOW_CHAIN_RPC_BACKUP_URL`** on transport failures (HTTP **429** is **not** treated as failover—rate limits are handled by pacing and backoff, preserving **sovereign** control over flapping).
+
+---
+
+## Full-stack & Docker deployment
+
+For **Metabase**, **pgAdmin**, and **fully containerized** stacks, use the compose bundle under `lucentflow-deployment/docker/`. Health checks and operator runbooks live in **`docs/`** (e.g. `docs/metabase.md`, `docs/INFRASTRUCTURE.md`).
+
 ```bash
 cd lucentflow-deployment/docker
-
-# Spin up entire stack (App, DB, Metabase, pgAdmin) - requires Docker Compose V2
 docker compose up --build -d
-```
-
-### ✅ Verify Health Status
-
-Once containers are running, you can verify application health:
-```bash
 curl http://localhost:8080/actuator/health
-# Expected Output: {"status":"UP"}
 ```
+
+---
+
+## Observability
+
+| Surface | URL |
+|--------|-----|
+| **Swagger UI** | [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html) |
+| **Metabase** | [http://localhost:3000](http://localhost:3000) |
+| **pgAdmin** | [http://localhost:5050](http://localhost:5050) |
+
+---
+
+## Diagrams (optional)
+
 <p align="center">
-  <img src="docs/images/dashboard_hero.png" width="800" alt="dashboard hero">
+  <img src="docs/images/dashboard_hero.png" width="800" alt="Whale ecology dashboard">
   <br>
-  <em>Caption: Figure 1: Real-time Whale Ecology & Activity Patterns on Base.</em>
+  <em>Figure 1: Real-time whale ecology & activity patterns on Base.</em>
 </p>
 
+<p align="center">
+  <img src="docs/images/dockerps.png" width="800" alt="Docker operational status">
+  <br>
+  <em>Figure 2: Local cluster healthy state (Docker).</em>
+</p>
 
-## 🛠️ Developer Mode (Hybrid Mode)
-Ideal for active development, debugging, and testing.
+---
 
-**Linux/Mac:**
-```bash
-# Start Infrastructure only (Docker)
-./start-infrastructure.sh
+## License
 
-# Build & Run Application (Local)
-mvn clean install -DskipTests
-
-# Run with local profile
-java "-Dspring.profiles.active=local" \
-     -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
-```
-
-**Windows:**
-```powershell
-# Start Infrastructure only (Docker)
-.\start-infrastructure.ps1
-
-# Build & Run Application (Local)
-mvn clean install -DskipTests
-
-# Run with local profile
-java "-Dspring.profiles.active=local" `
-     -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
-```
-
-**Note:** In Hybrid mode, the local application connects to the Dockerized database via localhost:5432.
-
-## 📊 Monitoring & Visualization
-Access your security dashboard:
-
-- **Metabase Dashboards**: [http://localhost:3000](http://localhost:3000) (Visualize capital inflow/outflow)
-- **Interactive API Console**: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html)
-- **Database Management (pgAdmin)**: [http://localhost:5050](http://localhost:5050)
-
-## ⚖️ License
-
-Distributed under Apache License 2.0. Built with passion for Base community.
+**Apache License 2.0** — built for the Base ecosystem and for teams who demand **sovereign**, **verifiable** security infrastructure.

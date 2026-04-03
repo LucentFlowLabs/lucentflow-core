@@ -7,13 +7,15 @@ spring:
     hikari:
       maximum-pool-size: 20
       minimum-idle: 5
-      connection-timeout: 20000
+      # Monday-morning resilience: recycle connections before PG/firewall idle kills; keep TCP alive over long idle (e.g. weekends).
+      connection-timeout: 60000
       idle-timeout: 300000
-      max-lifetime: 1200000
+      max-lifetime: 600000
+      keepalive-time: 30000
       leak-detection-threshold: 2000
       
   jpa:
-    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    open-in-view: false
     hibernate:
       ddl-auto: update
       show-sql: false
@@ -61,6 +63,21 @@ management:
 
 # Basescan API Configuration
 lucentflow:
+  indexer:
+    # Fixed delay between scheduler ticks (ms). Actual scan cadence uses polling-interval-ms / cooldown via AdaptiveBackpressureController.
+    scheduler-tick-ms: ${LUCENTFLOW_INDEXER_SCHEDULER_TICK_MS:200}
+    polling-interval-ms: ${LUCENTFLOW_INDEXER_POLLING_INTERVAL_MS:2000}
+    max-batch-size: ${LUCENTFLOW_INDEXER_MAX_BATCH_SIZE:200}
+    max-concurrency: ${LUCENTFLOW_INDEXER_MAX_CONCURRENCY:2}
+    catchup-boost-enabled: ${LUCENTFLOW_INDEXER_CATCHUP_BOOST_ENABLED:false}
+    cooldown:
+      window-ms: ${LUCENTFLOW_INDEXER_COOLDOWN_WINDOW_MS:30000}
+      polling-interval-ms: ${LUCENTFLOW_INDEXER_COOLDOWN_POLLING_INTERVAL_MS:10000}
+      max-batch-size: ${LUCENTFLOW_INDEXER_COOLDOWN_MAX_BATCH_SIZE:20}
+  chain:
+    rpc-url: ${LUCENTFLOW_CHAIN_RPC_URL:https://mainnet.base.org}
+    # Applied only when rpc-url is NOT mainnet.base.org (Alchemy / QuickNode / Infura / etc.).
+    professional-inter-batch-sleep-ms: ${LUCENTFLOW_CHAIN_PROFESSIONAL_INTER_BATCH_SLEEP_MS:2000}
   basescan:
     api-key: ${BASESCAN_API_KEY:}
     base-url: https://api.basescan.org/api

@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -35,7 +36,33 @@ public interface WhaleTransactionRepository extends JpaRepository<WhaleTransacti
      * @return Optional containing the whale transaction if exists
      */
     Optional<WhaleTransaction> findByHash(String hash);
+
+    /**
+     * Count contract-creation whale transactions from the same initiator after a time boundary.
+     * Optimized for serial deployer / factory heuristics (indexed {@code from_address} + {@code timestamp}, creations-only).
+     *
+     * @param fromAddress transaction initiator (deployer)
+     * @param since       exclusive lower bound on {@link WhaleTransaction#getTimestamp()}
+     * @return number of matching rows
+     */
+    @Query("SELECT COUNT(w) FROM WhaleTransaction w WHERE w.fromAddress = :fromAddress AND w.isContractCreation = true AND w.timestamp > :since")
+    long countRecentDeployments(@Param("fromAddress") String fromAddress, @Param("since") Instant since);
+
+    /**
+     * Prior contract-creation rows with the same bytecode fingerprint within the lookback window.
+     * Current tx is usually not persisted yet, so this counts previous deployments only.
+     */
+    @Query("SELECT COUNT(w) FROM WhaleTransaction w WHERE w.bytecodeHash = :bytecodeHash AND w.isContractCreation = true AND w.timestamp >= :since")
+    long countByBytecodeHashSince(@Param("bytecodeHash") String bytecodeHash, @Param("since") Instant since);
     
+    /**
+     * Returns the single transaction with the highest ETH value using an indexed ORDER BY LIMIT 1.
+     * Replaces the previous anti-pattern of {@code findAll().stream().max(...)}.
+     *
+     * @return Optional containing the highest-value whale transaction, empty if table is empty
+     */
+    Optional<WhaleTransaction> findTopByOrderByValueEthDesc();
+
     /**
      * Check if whale transaction exists by hash (optimized for batch operations)
      * @param hash Transaction hash

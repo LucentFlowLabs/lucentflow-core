@@ -1,5 +1,34 @@
 # LucentFlow Changelog
 
+All notable changes are tracked here. Format follows [Keep a Changelog](https://keepachangelog.com/) conventions.
+
+---
+
+## [v1.1.0] — 2026-04-03 (STABLE)
+
+### Highlights — Sovereign Forensic OS & Adaptive Runtime
+
+- **Adaptive RPC pacing** — Intelligent distinction between **PROFESSIONAL** (Alchemy, QuickNode, Infura, BlastAPI, Ankr, …) and **PUBLIC** (`mainnet.base.org`) tiers. **Official public RPC** uses **SAFE_PUBLIC_POLICY**: hardcoded conservative batch, concurrency, and interval so shared infrastructure cannot be accidentally overloaded via `.env`. **PROFESSIONAL_OVERRIDE** applies when `LUCENTFLOW_CHAIN_RPC_URL` is **not** the official host—operators may tune batch size, concurrency, and inter-batch sleep for paid throughput.
+- **Zero-config CLI** — `mvn package` mirrors the fat JAR to repository root as **`lucentflow.jar`**. **`AdaptiveEnvLoader`** performs **multi-path `.env` discovery** (root `.env`, `lucentflow-deployment/docker/.env`, parent-relative docker path) with **first-wins** merge semantics for duplicate keys.
+- **Transparent proxy mapping** — `PROXY_HOST` / `PROXY_PORT` from `.env` propagate to JVM `http(s).proxyHost` / `http(s).proxyPort`. For **`local`** profile runs, **`host.docker.internal`** is rewritten to **`127.0.0.1`** so host-side CLIs do not chase a Docker-only hostname.
+- **Virtual-thread throttling** — Indexer RPC fairness uses a **semaphore-style** concurrency gate (`RpcConcurrencyGovernor`) with optional catch-up boost (disabled by default on public tiers), aligned with adaptive backpressure on HTTP **429** soft-fail paths.
+
+### Security & Resilience
+
+- **TCV (Triple Cross-Validation)** — Continued hardening of private-key and address derivation paths via standard vectors, sign→recover loopback, and clean-room Keccak validation (`CryptoUtilsTest` anchor suite).
+- **Rate-limit soft-fail resilience** — **429** is treated as a **throttle signal**, not endpoint death: OkHttp **does not** failover to backup on 429; the stack uses governor cooldown, scheduler pacing, and chunk retry semantics to absorb storms without flapping endpoints.
+
+### Operator Experience
+
+- **CLI boot line** — `[BOOT] Adaptive Environment active` plus **`[CLI]`** working-directory and resolved `.env` paths after application start.
+- **Generational ZGC** — Documented as the **v1.1.0** baseline for sub-millisecond pause targets on long-lived JVMs (see `INFRASTRUCTURE.md`).
+
+### Also in the v1.1.x release train
+
+- Virtual Threads pinning cleanup; Genesis Trace 2.0 (recursive funding); Anti-Rug 2.0 heuristics; Caffeine bounded caches; Telegram alerting integration.
+
+---
+
 ## Version 1.0.0-RELEASE (2026-03-17)
 
 🚀 **Architectural Leap**: Implemented Java 21 Virtual Threads (Loom) for high-concurrency L2 monitoring.
@@ -7,7 +36,7 @@
 🐳 **Deployment**: Full-stack Dockerization with .env template and automated health checks.
 📊 **Observability**: Modularized components with Spring Boot Actuator and Metabase dashboard support.
 
-### � Major Features
+### Major Features
 
 #### Java 21 Virtual Threads Integration
 - **Project Loom**: Massive I/O throughput with minimal memory footprint
@@ -117,7 +146,7 @@ docker-compose up --build -d
 ```bash
 # Fast iterative development with local Maven
 mvn clean install -DskipTests
-java -jar lucentflow-api/target/lucentflow-api-1.0.0-RELEASE.jar
+java -jar lucentflow-api/target/lucentflow-api.jar
 ```
 
 ### 🌍 Platform Support

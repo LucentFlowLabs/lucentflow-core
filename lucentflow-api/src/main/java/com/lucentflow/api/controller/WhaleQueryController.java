@@ -146,21 +146,23 @@ public class WhaleQueryController {
         )
     })
     public ResponseEntity<Map<String, Object>> getSyncStatus() {
-        Optional<com.lucentflow.common.entity.SyncStatus> syncStatusOpt = 
-                syncStatusRepository.findFirstByOrderByIdDesc();
-        
+        // ID=1 Protocol: the entire indexing system writes exclusively to row id=1.
+        // findFirstByOrderByIdDesc() is semantically wrong and returns the wrong row if multiple exist.
+        Optional<com.lucentflow.common.entity.SyncStatus> syncStatusOpt =
+                syncStatusRepository.findById(1L);
+
         if (syncStatusOpt.isPresent()) {
             com.lucentflow.common.entity.SyncStatus syncStatus = syncStatusOpt.get();
-            
+
             Map<String, Object> response = new HashMap<>();
             response.put("lastScannedBlock", syncStatus.getLastScannedBlock());
             response.put("createdAt", syncStatus.getCreatedAt());
             response.put("updatedAt", syncStatus.getUpdatedAt());
             response.put("syncStatus", "ACTIVE");
-            
-            log.info("Retrieved sync status: last scanned block {}, updated at {}", 
+
+            log.info("Retrieved sync status: last scanned block {}, updated at {}",
                     syncStatus.getLastScannedBlock(), syncStatus.getUpdatedAt());
-            
+
             return ResponseEntity.ok(response);
         } else {
             Map<String, Object> response = new HashMap<>();
@@ -168,9 +170,9 @@ public class WhaleQueryController {
             response.put("createdAt", null);
             response.put("updatedAt", null);
             response.put("syncStatus", "NOT_STARTED");
-            
+
             log.info("No sync status found, returning default values");
-            
+
             return ResponseEntity.ok(response);
         }
     }
@@ -207,10 +209,8 @@ public class WhaleQueryController {
         stats.put("databaseStatus", "CONNECTED");
         stats.put("lastUpdated", System.currentTimeMillis());
         
-        // Calculate total value (simplified - in production would use aggregate query)
-        Optional<WhaleTransaction> maxTransaction = whaleTransactionRepository.findAll()
-                .stream()
-                .max((a, b) -> a.getValueEth().compareTo(b.getValueEth()));
+        // Single-row ORDER BY value_eth DESC LIMIT 1 — avoids full-table heap load.
+        Optional<WhaleTransaction> maxTransaction = whaleTransactionRepository.findTopByOrderByValueEthDesc();
         
         maxTransaction.ifPresent(tx -> {
             stats.put("largestWhaleTransaction", Map.of(
