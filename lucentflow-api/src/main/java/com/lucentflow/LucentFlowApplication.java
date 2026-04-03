@@ -1,5 +1,6 @@
 package com.lucentflow;
 
+import com.lucentflow.common.config.AdaptiveEnvLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
@@ -37,8 +38,10 @@ public class LucentFlowApplication {
     }
 
     public static void main(String[] args) {
-        // Fail-fast security guard for Java 21
-        String postgresPassword = System.getenv("POSTGRES_PASSWORD");
+        AdaptiveEnvLoader.loadEnv();
+
+        // Fail-fast security guard for Java 21 (.env may have set system properties only)
+        String postgresPassword = resolvePostgresPasswordFromEnvOrProperties();
         if (postgresPassword == null || postgresPassword.trim().isEmpty()) {
             log.error("\n\n🚨 SECURITY VIOLATION: POSTGRES_PASSWORD environment variable is not set!");
             log.error("   LucentFlow cannot start without secure database credentials.");
@@ -49,5 +52,13 @@ public class LucentFlowApplication {
         
         log.info("🔐 Security check passed - POSTGRES_PASSWORD is configured");
         SpringApplication.run(LucentFlowApplication.class, args);
+    }
+
+    private static String resolvePostgresPasswordFromEnvOrProperties() {
+        String fromEnv = System.getenv("POSTGRES_PASSWORD");
+        if (fromEnv != null && !fromEnv.trim().isEmpty()) {
+            return fromEnv;
+        }
+        return System.getProperty("POSTGRES_PASSWORD");
     }
 }

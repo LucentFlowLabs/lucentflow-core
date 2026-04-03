@@ -4,6 +4,44 @@
 
 LucentFlow supports **Hybrid Development Mode** for optimal Base network development experience. This architecture combines Dockerized infrastructure services with local application execution, enabling rapid iteration while maintaining production-like database persistence and configuration.
 
+**v1.1.0-STABLE** adds a **sovereign CLI path**: build once, run a **root-mirrored fat JAR** with **Adaptive Environment Sensing**—no wall of `-D` flags required for typical workflows.
+
+---
+
+## Zero-config root JAR (v1.1.0)
+
+After `mvn package`, the build copies the executable JAR to **`lucentflow.jar`** at the **repository root** (alongside `lucentflow-api/target/...`). From the repo root:
+
+```bash
+mvn clean package
+cp lucentflow-deployment/docker/.env.example .env
+# Edit .env (POSTGRES_PASSWORD, RPC URLs, etc.)
+java -jar lucentflow.jar
+```
+
+**AdaptiveEnvLoader** (runs *before* `SpringApplication.run`):
+
+- Merges `.env` from, in order: `./.env` → `./lucentflow-deployment/docker/.env` → `../lucentflow-deployment/docker/.env` (first file **wins** on duplicate keys).
+- Skips keys already present in the OS environment or JVM system properties (Kubernetes/Docker-safe).
+- **Profile**: if `SPRING_PROFILES_ACTIVE` is unset and the process is **not** detected inside a container, `spring.profiles.active=local` is applied.
+- **Proxy**: `PROXY_HOST` / `PROXY_PORT` map to standard JVM `http(s).proxy*` properties.
+
+### The “proxy hack” for local runs
+
+Docker Compose templates often set **`PROXY_HOST=host.docker.internal`** so containers reach a VPN or proxy on the host. On a **bare-metal** `java -jar` from your machine, that hostname may not resolve.
+
+When the active profile is **`local`** and `PROXY_HOST` is **`host.docker.internal`**, the loader **rewrites** it to **`127.0.0.1`** before setting JVM proxy properties—so the same `.env` file can work in **Docker** (host gateway) and **CLI** (loopback) without manual edits.
+
+---
+
+## Run configurations (IDE & CLI)
+
+| Method | Notes |
+|--------|--------|
+| **`java -jar lucentflow.jar`** | Preferred for parity with production-like fat JAR; relies on `.env` + `AdaptiveEnvLoader`. |
+| `-Dspring.profiles.active=local` | **Optional**; still supported when you need to **override** profile without touching `.env`. |
+| Full explicit `-D` proxy flags | **Optional**; redundant if `.env` already defines `PROXY_*` (loader maps them). |
+
 ---
 
 ## 🎯 Hybrid Development Philosophy
@@ -160,9 +198,15 @@ spring:
 
 ## 🌐 RPC Proxy Configuration
 
-### Corporate Proxy Setup
+### Preferred: `.env` (Adaptive Proxy Mapping)
 
-For development behind corporate firewalls, configure proxy settings:
+Set **`PROXY_HOST`** and **`PROXY_PORT`** in `.env` at the repo root (or merged `lucentflow-deployment/docker/.env`). The loader applies them to **`http.proxyHost`**, **`http.proxyPort`**, **`https.proxyHost`**, and **`https.proxyPort`** automatically.
+
+For **local** runs, **`host.docker.internal`** is rewritten to **`127.0.0.1`** (see *Zero-config root JAR* above).
+
+### Corporate Proxy Setup (explicit JVM flags)
+
+For development behind corporate firewalls, you may still pass explicit JVM flags (optional overrides):
 
 ```bash
 # Development with proxy
@@ -327,7 +371,15 @@ public class WhaleTransaction {
 
 ## 🚀 Local Application Execution
 
-### Development Mode Startup
+### Root JAR (recommended, v1.1.0)
+
+```bash
+# From repository root
+mvn clean package -DskipTests
+java -jar lucentflow.jar
+```
+
+### Development Mode Startup (Maven)
 
 ```bash
 # Navigate to API module
@@ -340,10 +392,10 @@ mvn spring-boot:run \
   "-Dhttps.proxyPort=10808"
 ```
 
-### JAR Execution (Alternative)
+### Module JAR (Alternative)
 
 ```bash
-# Build and run JAR directly
+# Build and run JAR directly from module
 cd lucentflow-api
 mvn clean package -DskipTests
 
@@ -581,4 +633,4 @@ docker-compose -f lucentflow-deployment/docker/docker-compose.yml up --build -d
 
 **Hybrid Development Mode provides best of both worlds: production-like infrastructure with development speed and flexibility.**
 
-*Local development guide maintained for LucentFlow v1.0.0-RELEASE with Java 21 Virtual Threads*
+*Local development guide maintained for LucentFlow **v1.1.0-STABLE** — Java 21 Virtual Threads & Adaptive Environment Engine.*
