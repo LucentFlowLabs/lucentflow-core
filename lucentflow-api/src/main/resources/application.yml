@@ -47,7 +47,7 @@ lucentflow:
   chain:
     # Default Base public RPC; set LUCENTFLOW_CHAIN_RPC_URL for Alchemy / QuickNode / Infura / BlastAPI (professional tier)
     rpc-url: ${LUCENTFLOW_CHAIN_RPC_URL:https://mainnet.base.org}
-    # Failover JSON-RPC when primary returns 4xx/5xx or I/O errors (5-minute backup window via OkHttp interceptor)
+    # Failover JSON-RPC when primary returns 4xx/5xx (except 429) or I/O errors (5-minute backup window via OkHttp interceptor)
     rpc-backup-url: ${LUCENTFLOW_CHAIN_RPC_BACKUP_URL:https://mainnet.base.org}
     # PROFESSIONAL tier only: sleep between 100-block checkpoint chunks (orchestrator uses max(this, 500ms)). Lower = faster, more 429 risk.
     professional-inter-batch-sleep-ms: ${LUCENTFLOW_CHAIN_PROFESSIONAL_INTER_BATCH_SLEEP_MS:2000}
