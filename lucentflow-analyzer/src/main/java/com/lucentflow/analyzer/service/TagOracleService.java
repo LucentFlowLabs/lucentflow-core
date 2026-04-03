@@ -10,12 +10,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.Locale;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 
 /**
- * LucentTag Oracle: in-memory map of all {@link EntityTag} rows for O(1) resolution during indexing,
- * with thread-safe DB + cache updates.
+ * LucentTag Oracle: immutable snapshot of {@link EntityTag} rows for O(1) resolution during indexing.
+ * Copy-on-write updates avoid holding locks across database I/O (virtual-thread pinning safe).
  *
  * @author ArchLucent
  * @since 1.0
@@ -27,7 +28,10 @@ public class TagOracleService {
 
     private final EntityTagRepository entityTagRepository;
 
-    private final ConcurrentHashMap<String, String> tagByAddressLower = new ConcurrentHashMap<>();
+    /** Guards only snapshot pointer swaps; never held during repository I/O. */
+    private final Object snapshotLock = new Object();
+
+    private volatile Map<String, String> tagSnapshot = Map.of();
 
     @PostConstruct
     void loadCacheFromDatabase() {
@@ -35,17 +39,22 @@ public class TagOracleService {
     }
 
     /**
-     * Replaces the in-memory map with the current database snapshot (e.g. after bulk admin updates).
+     * Replaces the in-memory snapshot with the current database view (e.g. after bulk admin updates).
      */
-    public synchronized void reloadFromDatabase() {
-        tagByAddressLower.clear();
-        for (EntityTag row : entityTagRepository.findAll()) {
+    public void reloadFromDatabase() {
+        java.util.List<EntityTag> rows = entityTagRepository.findAll();
+        Map<String, String> next = new HashMap<>();
+        for (EntityTag row : rows) {
             String k = normalizeAddress(row.getAddress());
             if (k != null) {
-                tagByAddressLower.put(k, row.getTagName());
+                next.put(k, row.getTagName());
             }
         }
-        log.info("[LUCENT-TAG] Loaded {} oracle labels into cache.", tagByAddressLower.size());
+        Map<String, String> frozen = Map.copyOf(next);
+        synchronized (snapshotLock) {
+            tagSnapshot = frozen;
+        }
+        log.info("[LUCENT-TAG] Loaded {} oracle labels into cache.", frozen.size());
     }
 
     /**
@@ -56,14 +65,14 @@ public class TagOracleService {
         if (k == null) {
             return null;
         }
-        return tagByAddressLower.get(k);
+        return tagSnapshot.get(k);
     }
 
     /**
      * Upserts a tag in PostgreSQL and updates the hot cache (same visibility as DB commit).
      */
     @Transactional
-    public synchronized void updateTag(String address, String name, String category) {
+    public void updateTag(String address, String name, String category) {
         String normalized = normalizeAddress(address);
         if (normalized == null || name == null || name.isBlank()) {
             return;
@@ -90,8 +99,13 @@ public class TagOracleService {
             entity.setRiskScoreModifier(0);
         }
         entityTagRepository.save(entity);
-        tagByAddressLower.put(normalized, entity.getTagName());
-        log.debug("[LUCENT-TAG] Upserted {} -> {}", normalized, entity.getTagName());
+        String tagName = entity.getTagName();
+        synchronized (snapshotLock) {
+            Map<String, String> neu = new HashMap<>(tagSnapshot);
+            neu.put(normalized, tagName);
+            tagSnapshot = Map.copyOf(neu);
+        }
+        log.debug("[LUCENT-TAG] Upserted {} -> {}", normalized, tagName);
     }
 
     /**

@@ -141,12 +141,17 @@ public class Web3jAutoConfiguration {
         // Configure connection pool
         ConnectionPool connectionPool = new ConnectionPool(50, 5, TimeUnit.MINUTES);
 
+        Duration connectTimeout = Duration.ofSeconds(30);
+        Duration readTimeout = Duration.ofSeconds(90);
+        Duration writeTimeout = Duration.ofSeconds(30);
+        Duration callTimeout = Duration.ofSeconds(120);
+
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
                 .addInterceptor(new RpcFailoverInterceptor(rpcEndpointState))
-                .connectTimeout(Duration.ofSeconds(30))
-                .readTimeout(Duration.ofSeconds(90))
-                .writeTimeout(Duration.ofSeconds(30))
-                .callTimeout(Duration.ofSeconds(120))
+                .connectTimeout(connectTimeout)
+                .readTimeout(readTimeout)
+                .writeTimeout(writeTimeout)
+                .callTimeout(callTimeout)
                 .connectionPool(connectionPool)
                 .dispatcher(dispatcher)
                 .retryOnConnectionFailure(true);
@@ -169,7 +174,18 @@ public class Web3jAutoConfiguration {
             }
         }
 
-        return builder.build();
+        OkHttpClient client = builder.build();
+        log.info(
+                "[HTTP-CLIENT] OkHttp timeouts — connect={}ms read={}ms write={}ms call={}ms | "
+                        + "connectionPool maxIdle=50 keepAlive=5m | dispatcher maxRequests={} maxRequestsPerHost={} | "
+                        + "retryOnConnectionFailure=true",
+                connectTimeout.toMillis(),
+                readTimeout.toMillis(),
+                writeTimeout.toMillis(),
+                callTimeout.toMillis(),
+                client.dispatcher().getMaxRequests(),
+                client.dispatcher().getMaxRequestsPerHost());
+        return client;
     }
 
     /**
@@ -206,13 +222,22 @@ public class Web3jAutoConfiguration {
         RpcProviderType type = RpcProviderType.fromRpcUrl(properties.getRpcUrl());
         long proSleep = Math.max(0L, professionalInterBatchSleepMs);
         // Alchemy / QuickNode / Infura / BlastAPI: conservative free-tier throttling.
-        return switch (type) {
+        RpcProviderConfig cfg = switch (type) {
             // Professional endpoints: 8 permits is the Alchemy Free-Tier sweet spot
             // (330 CUPS budget / ~40 CUPS per block = safe ceiling for sustained syncs).
             // Inter-batch delay is tunable via lucentflow.chain.professional-inter-batch-sleep-ms (default 2000ms).
             case PROFESSIONAL -> new RpcProviderConfig(type, 8, 100, proSleep);
             case PUBLIC -> new RpcProviderConfig(type, 2, 50, 3000L);
         };
+        log.info(
+                "[RPC-POLICY] RpcProviderConfig tier={} recommendedRpcSemaphorePermits={} recommendedPipelineChunk={} interBatchSleepMs={}. "
+                        + "Indexer *effective* concurrency is lucentflow.indexer.max-concurrency (IndexerRpcProfile / RpcConcurrencyGovernor), "
+                        + "not this bean's recommendedPermits — align env LUCENTFLOW_INDEXER_MAX_CONCURRENCY with your RPC plan.",
+                cfg.providerType(),
+                cfg.recommendedRpcSemaphorePermits(),
+                cfg.recommendedPipelineChunkSize(),
+                cfg.interBatchSleepMillis());
+        return cfg;
     }
 
     private static boolean isLoopbackProxyHost(String host) {
