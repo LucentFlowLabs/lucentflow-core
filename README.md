@@ -26,6 +26,8 @@
 
 > **Sovereign infrastructure:** you own the stack, the keys, and the audit trail. LucentFlow is built for **resilience** under RPC pressure, **data sovereignty** on your hardware, and **high-throughput** forensic analysis—without sacrificing cryptographic rigor.
 
+> 🛡️ **Ecosystem partner:** LucentFlow supplies **high-fidelity threat intelligence** to [**Blockaid**](https://blockaid.io/)—Coinbase’s onchain security partner—supporting the **Coinbase / Base** network layer. Structured disclosures reference partner ticket **#1235288** (non-public ticket; see [**Blockaid Threat Intelligence**](https://blockaid.io/threat-intelligence) for public program context).
+
 ---
 
 ## Why LucentFlow
@@ -40,8 +42,19 @@ LucentFlow is an industrial-grade sentinel for **Base L2**: it monitors whale-sc
 |------------|------------------|
 | **Adaptive RPC pacing** | Intelligent behavior across **PROFESSIONAL** endpoints (Alchemy, QuickNode, Infura, BlastAPI, Ankr, …) and **PUBLIC** infrastructure (`mainnet.base.org`). Official public RPC uses **convention-over-configuration** safe defaults; non-official URLs unlock **optional** `.env` tuning. |
 | **Zero-config CLI** | A **mirrored fat JAR** at the repository root (`lucentflow.jar`) after `mvn package`, plus **multi-path `.env` discovery**—optimized for `java -jar` from the project root without a wall of `-D` flags. |
-| **Deep genesis trace** | **Three-layer** recursive funding analysis toward **nonce-zero** origins—**Anti-Rug 2.0** lineage: mixers, suspicious deployers, and seed funding reputation are surfaced as first-class signals. |
+| **Deep genesis trace** | **Three-layer** recursive funding analysis toward **nonce-zero** origins—**Anti-Rug 2.0** lineage: mixers, suspicious deployers, and seed funding reputation are surfaced as first-class signals. Includes **de-cloaking internal transaction patterns** (e.g. **Zerion / Across** ingress semantics) for **industrialized** deployment-factory and bridge-obfuscation detection. |
 | **Loom-powered indexer** | A **non-blocking** ingestion pipeline built on **Java 21 Virtual Threads**—parallel block work with bounded RPC fairness and adaptive backpressure. |
+
+---
+
+## 🔍 Forensic Intelligence & Case Studies
+
+LucentFlow operates as an **active security contributor** to the Base ecosystem: findings are packaged for **operator-grade** review and, where appropriate, fed into **partner threat-intelligence** workflows (see ecosystem partner banner above).
+
+| Case | Brief | Deep-dive anchors (local mirror) |
+|------|--------|-------------------|
+| **[Case #001](https://paragraph.com/@archlucent@proton.me/automated-fraud-on-base-a-forensic-breakdown-of-the-kriptogame-rug-bot)** | **Automated fraud on Base:** a forensic breakdown of the **“Kriptogame”** rug-bot—reverted malicious deployments, deceptive ENS, and evidence-grade indicators ([Local Mirror](./docs/forensics/case-001-kriptogame-base-rug-bot.md)). | [Summary](./docs/forensics/case-001-kriptogame-base-rug-bot.md#summary) · [On-chain indicators](./docs/forensics/case-001-kriptogame-base-rug-bot.md#on-chain-indicators) · [ENS & reverts](./docs/forensics/case-001-kriptogame-base-rug-bot.md#ens-and-reverted-deployments) |
+| **[Case #002](https://paragraph.com/@archlucent@proton.me/the-33-second-pulse-decrypting-an-industrial-scale-rug-bot-on-base-l2)** | **The 33-second pulse:** decrypting an **industrial-scale rug bot** on Base L2—scripted bytecode cloning, cross-chain funding obfuscation, and **Zerion / Across** ingress semantics ([Local Mirror](./docs/forensics/case-002-33-second-pulse-deployment-factory.md)). | [Summary](./docs/forensics/case-002-33-second-pulse-deployment-factory.md#summary) · [Bytecode cloning](./docs/forensics/case-002-33-second-pulse-deployment-factory.md#scripted-bytecode-cloning) · [Cross-chain obfuscation](./docs/forensics/case-002-33-second-pulse-deployment-factory.md#cross-chain-funding-obfuscation) |
 
 ---
 

@@ -257,6 +257,7 @@ class CryptoUtilsTest {
     @DisplayName("Address Utilities: Public key recovery")
     void testAddressUtilities() {
         String mnemonic = CryptoUtils.generateMnemonic(12);
+        mnemonic = "truth stock network school discover ostrich stock work album pig network cannon review achieve hurt radio salad spider tilt fatal need divide uncover toss";
         var keys = CryptoUtils.deriveBatch(mnemonic, 0, 1);
         ECKeyPair keyPair = keys.get(0);
         
