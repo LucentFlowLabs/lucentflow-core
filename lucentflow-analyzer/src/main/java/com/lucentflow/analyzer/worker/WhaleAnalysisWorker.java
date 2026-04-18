@@ -17,6 +17,7 @@ import com.lucentflow.indexer.service.CreatorFundingTracer;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 import org.web3j.protocol.core.methods.response.Transaction;
@@ -78,8 +79,11 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     // Non-final to avoid being pulled into Lombok-generated constructor params.
     private Semaphore dbSaveSemaphore = new Semaphore(2);
 
-    private static final int BATCH_SIZE = 100;
-    private static final int CONCURRENCY = 10;
+    @Value("${lucentflow.analyzer.batch-size:20}")
+    private int batchSize;
+
+    @Value("${lucentflow.analyzer.concurrency:2}")
+    private int concurrency;
 
     private static final long CATCH_UP_LAG_THRESHOLD_BLOCKS = 500L;
     private static final int CATCH_UP_TRACE_MIN_RISK_SCORE = 60;
@@ -104,13 +108,16 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        log.info("Initializing WhaleAnalysisWorker with {} virtual thread workers.", CONCURRENCY);
+        int effectiveConcurrency = Math.max(1, concurrency);
+        int effectiveBatchSize = Math.max(1, batchSize);
+        log.info("Initializing WhaleAnalysisWorker with {} virtual thread workers (batchSize={}).",
+                effectiveConcurrency, effectiveBatchSize);
         
         // T10 Standard: Use class-level ExecutorService for proper lifecycle management
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         
         try {
-            for (int i = 0; i < CONCURRENCY; i++) {
+            for (int i = 0; i < effectiveConcurrency; i++) {
                 int workerId = i;
                 executor.submit(() -> startAnalysisLoop(workerId));
             }
@@ -135,7 +142,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     log.debug("Worker-{} polling for next batch...", workerId);
-                    List<Transaction> rawBatch = transactionPipe.drainBatch(BATCH_SIZE);
+                    List<Transaction> rawBatch = transactionPipe.drainBatch(Math.max(1, batchSize));
                     
                     if (rawBatch.isEmpty()) {
                         // Efficient waiting: pause for 100ms if no data

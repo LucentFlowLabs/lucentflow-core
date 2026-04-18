@@ -8,6 +8,8 @@ import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
 import com.lucentflow.indexer.source.BaseBlockSource;
 import com.lucentflow.sdk.config.RpcProviderConfig;
+import com.lucentflow.sdk.config.RpcEndpointState;
+import com.lucentflow.sdk.config.RpcProviderType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -17,6 +19,7 @@ import org.web3j.protocol.core.methods.response.EthBlock;
 
 import jakarta.annotation.PreDestroy;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ExecutorService;
@@ -58,6 +61,8 @@ public class PipelineOrchestrator {
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;
+    private static final long CHAINSTACK_PROFESSIONAL_CHUNK_SIZE = 10L;
+    private static final long PARALLEL_SUBMISSION_JITTER_MS = 10L;
 
     /** Blocks taking longer than this log at WARN with [PERF-SLOW-QUERY]; faster paths log at DEBUG only. */
     private static final long SLOW_RPC_THRESHOLD_MS = 2000L;
@@ -67,6 +72,7 @@ public class PipelineOrchestrator {
 
     private final IndexerRpcProfile indexerRpcProfile;
     private final RpcProviderConfig rpcProviderConfig;
+    private final RpcEndpointState rpcEndpointState;
 
     // Prevent overlapping scheduled executions from racing checkpoint writes.
     private final ReentrantLock scanLock = new ReentrantLock();
@@ -88,7 +94,8 @@ public class PipelineOrchestrator {
                                 JdbcTemplate jdbcTemplate,
                                 RpcConcurrencyGovernor rpcConcurrencyGovernor,
                                 AdaptiveBackpressureController backpressureController,
-                                IndexerRpcProfile indexerRpcProfile) {
+                                IndexerRpcProfile indexerRpcProfile,
+                                RpcEndpointState rpcEndpointState) {
         this.blockSource = blockSource;
         this.whaleDatabaseSink = whaleDatabaseSink;
         this.syncStatusRepository = syncStatusRepository;
@@ -98,6 +105,7 @@ public class PipelineOrchestrator {
         this.backpressureController = backpressureController;
         this.indexerRpcProfile = indexerRpcProfile;
         this.rpcProviderConfig = rpcProviderConfig;
+        this.rpcEndpointState = rpcEndpointState;
     }
     
     /**
@@ -133,6 +141,15 @@ public class PipelineOrchestrator {
             }
 
             long pipelineChunkSize = indexerRpcProfile.effectivePipelineChunkSize(rpcProviderConfig);
+            String primaryRpcUrl = rpcEndpointState.getPrimaryUrl() == null
+                    ? ""
+                    : rpcEndpointState.getPrimaryUrl().toLowerCase(Locale.ROOT);
+            boolean chainstackProfessional = rpcProviderConfig.providerType() == RpcProviderType.PROFESSIONAL
+                    && primaryRpcUrl.contains("chainstack");
+            if (chainstackProfessional) {
+                // Chainstack compatibility: cap professional chunking to avoid short-window RPC bursts.
+                pipelineChunkSize = CHAINSTACK_PROFESSIONAL_CHUNK_SIZE;
+            }
             long interBatchSleepMillis = indexerRpcProfile.effectiveInterBatchSleepMillis(rpcProviderConfig);
 
             long startBlock = blockRange[0];
@@ -142,9 +159,12 @@ public class PipelineOrchestrator {
             long sleepBetweenChunks = Math.max(interBatchSleepMillis, 500L);
             log.info(
                     "[SCAN] Starting batch {}–{} ({} blocks): pipelineChunkSize={}, interBatchSleepMs={} (officialHardcodedPacing={}). "
+                            + "rpcUrl={}, failoverActive={}. "
                             + "First [HEARTBEAT] appears after the first chunk finishes (not stalled unless this line repeats without progress).",
                     startBlock, endBlock, blocksToProcess, pipelineChunkSize, sleepBetweenChunks,
-                    indexerRpcProfile.usesOfficialHardcodedPacing());
+                    indexerRpcProfile.usesOfficialHardcodedPacing(),
+                    rpcEndpointState.currentRpcUrl(),
+                    rpcEndpointState.isFailoverActive());
             
             // Checkpoint/Resume: chunk size adapts to RPC provider (public vs professional).
             java.util.List<java.util.concurrent.CompletableFuture<Void>> checkpointFutures =
@@ -285,12 +305,10 @@ public class PipelineOrchestrator {
                 break;
             }
 
-            // Jitter between submissions to avoid Thundering Herd.
-            // ThreadLocalRandom is VT-safe and statistically unbiased under concurrent access.
+            // Fixed 10ms jitter smooths burst edges between async submissions.
             if (blockNum > startBlock) {
                 try {
-                    int jitterMs = 10 + java.util.concurrent.ThreadLocalRandom.current().nextInt(41);
-                    Thread.sleep(jitterMs);
+                    Thread.sleep(PARALLEL_SUBMISSION_JITTER_MS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;

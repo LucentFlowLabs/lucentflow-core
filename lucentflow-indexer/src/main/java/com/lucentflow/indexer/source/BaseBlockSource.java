@@ -9,6 +9,7 @@ import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.common.exception.RateLimitException;
 import com.lucentflow.indexer.repository.SyncStatusRepository;
 import com.lucentflow.sdk.config.RpcProviderConfig;
+import com.lucentflow.sdk.config.RpcProviderType;
 import lombok.extern.slf4j.Slf4j;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,6 +73,12 @@ public class BaseBlockSource {
 
     private final int rpcBlockTimeoutSeconds;
     private final int rpcReceiptTimeoutSeconds;
+    private final boolean chainstackRpsGuardEnabled;
+    private final long minRpcIntervalNanos;
+    private final AtomicLong nextRpcSlotNanos = new AtomicLong(0L);
+
+    // Keep safely below 25 RPS provider cap.
+    private static final long CHAINSTACK_MIN_RPC_INTERVAL_MS = 45L;
     
     // Retry configuration for RPC calls
     private final Retry retryConfig;
@@ -84,7 +91,8 @@ public class BaseBlockSource {
                            RpcConcurrencyGovernor rpcConcurrencyGovernor,
                            AdaptiveBackpressureController backpressureController,
                            IndexerRpcProfile indexerRpcProfile,
-                           ObjectProvider<org.flywaydb.core.Flyway> flywayProvider) {
+                           ObjectProvider<org.flywaydb.core.Flyway> flywayProvider,
+                           @Value("${lucentflow.chain.rpc-url:}") String primaryRpcUrl) {
         this.web3j = web3j;
         this.syncStatusRepository = syncStatusRepository;
         this.transactionPipe = transactionPipe;
@@ -95,6 +103,10 @@ public class BaseBlockSource {
         int pipelineChunk = rpcProviderConfig.recommendedPipelineChunkSize();
         long interBatchMs = rpcProviderConfig.interBatchSleepMillis();
         int effectivePermits = rpcConcurrencyGovernor.getBaselinePermits();
+        String rpcUrl = primaryRpcUrl == null ? "" : primaryRpcUrl.toLowerCase();
+        this.chainstackRpsGuardEnabled = rpcProviderConfig.providerType() == RpcProviderType.PROFESSIONAL
+                && rpcUrl.contains("chainstack");
+        this.minRpcIntervalNanos = TimeUnit.MILLISECONDS.toNanos(CHAINSTACK_MIN_RPC_INTERVAL_MS);
         // Timeout calibration: professional endpoints should fail fast and retry.
         int timeoutSeconds = switch (rpcProviderConfig.providerType()) {
             case PROFESSIONAL -> 10;
@@ -113,6 +125,12 @@ public class BaseBlockSource {
             log.info(
                     "[RPC-DETECTION] recommendedPermits ({}) differs from effective ({}) — indexing uses lucentflow.indexer.max-concurrency; raise it if your RPC plan allows.",
                     recommendedPermits, effectivePermits);
+        }
+        if (chainstackRpsGuardEnabled) {
+            log.info(
+                    "[RPC-THROTTLE] Chainstack guard enabled: minRpcIntervalMs={} (~{} RPS cap).",
+                    CHAINSTACK_MIN_RPC_INTERVAL_MS,
+                    Math.max(1L, 1000L / CHAINSTACK_MIN_RPC_INTERVAL_MS));
         }
         // Trigger Flyway initialization if present (bean side-effects / migrations).
         flywayProvider.getIfAvailable();
@@ -312,6 +330,28 @@ public class BaseBlockSource {
         }
         return t;
     }
+
+    /**
+     * Global RPC pacing for strict provider RPS limits (applies across block + receipt calls).
+     */
+    private void throttleRpcIfNeeded() throws InterruptedException {
+        if (!chainstackRpsGuardEnabled) {
+            return;
+        }
+        while (true) {
+            long now = System.nanoTime();
+            long scheduled = nextRpcSlotNanos.get();
+            long grantAt = Math.max(now, scheduled);
+            long nextSlot = grantAt + minRpcIntervalNanos;
+            if (nextRpcSlotNanos.compareAndSet(scheduled, nextSlot)) {
+                long waitNanos = grantAt - now;
+                if (waitNanos > 0L) {
+                    TimeUnit.NANOSECONDS.sleep(waitNanos);
+                }
+                return;
+            }
+        }
+    }
     
     /**
      * Get the last scanned block number.
@@ -350,7 +390,45 @@ public class BaseBlockSource {
         int depth = 0;
         while (t != null && depth++ < 10) {
             String msg = t.getMessage();
-            if (msg != null && (msg.contains("429") || msg.toLowerCase().contains("too many requests"))) {
+            if (msg != null) {
+                String lower = msg.toLowerCase();
+                if (msg.contains("429")
+                        || lower.contains("too many requests")
+                        || lower.contains("rate limit")
+                        || lower.contains("requests per second")
+                        || lower.contains("upgrade your subscription plan")) {
+                    return true;
+                }
+            }
+            t = t.getCause();
+        }
+        return false;
+    }
+
+    private static boolean isRateLimitOrQuotaError(Throwable t) {
+        int depth = 0;
+        while (t != null && depth++ < 10) {
+            String msg = t.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase();
+                if (lower.contains("too many requests")
+                        || lower.contains("rate limit")
+                        || lower.contains("requests per second")
+                        || lower.contains("upgrade your subscription plan")
+                        || lower.contains("archive, debug and trace requests are not available")
+                        || lower.contains("not available on your current plan")) {
+                    return true;
+                }
+            }
+            t = t.getCause();
+        }
+        return false;
+    }
+
+    private static boolean isHttpClientException(Throwable t) {
+        int depth = 0;
+        while (t != null && depth++ < 10) {
+            if (t instanceof org.web3j.protocol.exceptions.ClientConnectionException) {
                 return true;
             }
             t = t.getCause();
@@ -371,6 +449,7 @@ public class BaseBlockSource {
                 log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcConcurrencyGovernor.getQueueLength());
                 rpcConcurrencyGovernor.acquire();
                 try {
+                    throttleRpcIfNeeded();
                     // Execute the blocking RPC call on a virtual thread to prevent ForkJoinPool starvation
                     CompletableFuture<EthBlock> future = CompletableFuture.supplyAsync(() -> {
                         try {
@@ -410,9 +489,9 @@ public class BaseBlockSource {
                 log.warn("Shutdown in progress — rejected task for block {}: {}", blockNumber, e.getMessage());
                 return null;
             } catch (Exception e) {
-                if (is429Error(e) && (e instanceof org.web3j.protocol.exceptions.ClientConnectionException || e.getCause() instanceof org.web3j.protocol.exceptions.ClientConnectionException)) {
+                if (isRateLimitOrQuotaError(e) && isHttpClientException(e)) {
                     rpcConcurrencyGovernor.onRateLimitExceeded();
-                    throw new RateLimitException("RPC rate limit exceeded (429) while fetching block " + blockNumber, e);
+                    throw new RateLimitException("RPC plan/rate limit restriction while fetching block " + blockNumber, e);
                 }
                 throw e;
             }
@@ -423,8 +502,8 @@ public class BaseBlockSource {
         } catch (Throwable e) {
             Throwable root = unwrapExecution(e);
             // Treat rate-limits as a soft failure: do NOT throw and do NOT allow orchestrator to advance checkpoints.
-            if (is429Error(root)) {
-                log.warn("[429-CIRCUIT] Block {} still rate-limited after retries. Holding position and retrying later.", blockNumber);
+            if (isRateLimitOrQuotaError(root)) {
+                log.warn("[RPC-PLAN-LIMIT] Block {} rejected by provider plan/rate limit. Holding position and retrying later.", blockNumber);
                 return null;
             }
 
@@ -496,6 +575,7 @@ public class BaseBlockSource {
                 log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcConcurrencyGovernor.getQueueLength());
                 rpcConcurrencyGovernor.acquire();
                 try {
+                    throttleRpcIfNeeded();
                     CompletableFuture<EthGetTransactionReceipt> future = web3j.ethGetTransactionReceipt(txHash).sendAsync();
                     EthGetTransactionReceipt response = future.orTimeout(rpcReceiptTimeoutSeconds, TimeUnit.SECONDS).join();
                     if (response == null || response.getTransactionReceipt().isEmpty()) {
@@ -534,6 +614,7 @@ public class BaseBlockSource {
             log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcConcurrencyGovernor.getQueueLength());
             rpcConcurrencyGovernor.acquire();
             try {
+                throttleRpcIfNeeded();
                 return action.call();
             } finally {
                 rpcConcurrencyGovernor.release();

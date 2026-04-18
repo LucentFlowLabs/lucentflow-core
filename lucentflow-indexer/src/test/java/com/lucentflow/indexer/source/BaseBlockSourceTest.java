@@ -98,7 +98,7 @@ class BaseBlockSourceTest {
         AdaptiveBackpressureController backpressure = new AdaptiveBackpressureController(indexerRpcProfile);
         RpcConcurrencyGovernor rpcConcurrencyGovernor = new RpcConcurrencyGovernor(backpressure, indexerRpcProfile);
         baseBlockSource = new BaseBlockSource(web3j, syncStatusRepository, transactionPipe, rpcProviderConfig,
-                rpcConcurrencyGovernor, backpressure, indexerRpcProfile, flywayProvider);
+                rpcConcurrencyGovernor, backpressure, indexerRpcProfile, flywayProvider, "https://mainnet.base.org");
     }
 
     /** ID=1 protocol: checkpoint row used by {@code initializeLastScannedBlock} / {@code resolveStartBlock}. */
