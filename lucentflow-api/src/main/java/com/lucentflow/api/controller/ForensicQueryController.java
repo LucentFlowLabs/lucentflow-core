@@ -11,12 +11,21 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+
+import java.io.IOException;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Forensic query endpoints for external integrations.
@@ -33,6 +42,8 @@ public class ForensicQueryController {
     private static final int DEFAULT_PAGE = 0;
     private static final int DEFAULT_SIZE = 20;
     private static final int MAX_SIZE = 100;
+    private static final DateTimeFormatter EXPORT_FILENAME_TIME =
+            DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
 
     private final ForensicQueryService forensicQueryService;
 
@@ -71,5 +82,82 @@ public class ForensicQueryController {
                 minRiskScore, maxRiskScore, address, bytecodeHash, reason, pageable
         );
         return ResponseEntity.ok(result);
+    }
+
+    @GetMapping(value = "/events/export/json", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Transactional(readOnly = true)
+    @Operation(summary = "Export forensic events as JSON", description = "Stream filtered forensic events as JSON array")
+    public ResponseEntity<StreamingResponseBody> exportForensicEventsAsJson(
+            @RequestParam(required = false) Integer minRiskScore,
+            @RequestParam(required = false) Integer maxRiskScore,
+            @RequestParam(required = false) String address,
+            @RequestParam(required = false) String bytecodeHash,
+            @RequestParam(required = false) String reason
+    ) {
+        if (minRiskScore != null && maxRiskScore != null && minRiskScore > maxRiskScore) {
+            return ResponseEntity.badRequest().build();
+        }
+        String filename = "lucentflow-forensics-" + EXPORT_FILENAME_TIME.format(Instant.now()) + ".json";
+        StreamingResponseBody body = outputStream -> executeOnVirtualThread(() ->
+                forensicQueryService.exportJson(minRiskScore, maxRiskScore, address, bytecodeHash, reason, outputStream));
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body);
+    }
+
+    @GetMapping(value = "/events/export/csv", produces = "text/csv")
+    @Transactional(readOnly = true)
+    @Operation(summary = "Export forensic events as CSV", description = "Stream filtered forensic events as CSV with UTF-8 BOM")
+    public ResponseEntity<StreamingResponseBody> exportForensicEventsAsCsv(
+            @RequestParam(required = false) Integer minRiskScore,
+            @RequestParam(required = false) Integer maxRiskScore,
+            @RequestParam(required = false) String address,
+            @RequestParam(required = false) String bytecodeHash,
+            @RequestParam(required = false) String reason
+    ) {
+        if (minRiskScore != null && maxRiskScore != null && minRiskScore > maxRiskScore) {
+            return ResponseEntity.badRequest().build();
+        }
+        String filename = "lucentflow-forensics-" + EXPORT_FILENAME_TIME.format(Instant.now()) + ".csv";
+        StreamingResponseBody body = outputStream -> executeOnVirtualThread(() ->
+                forensicQueryService.exportCsv(minRiskScore, maxRiskScore, address, bytecodeHash, reason, outputStream));
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
+                .body(body);
+    }
+
+    private void executeOnVirtualThread(IoTask task) throws IOException {
+        if (Thread.currentThread().isVirtual()) {
+            task.run();
+            return;
+        }
+        AtomicReference<IOException> errorRef = new AtomicReference<>();
+        Thread thread = Thread.ofVirtual().name("forensics-export-vt").unstarted(() -> {
+            try {
+                task.run();
+            } catch (IOException e) {
+                errorRef.set(e);
+            }
+        });
+        thread.start();
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Export interrupted while waiting for virtual thread", e);
+        }
+        IOException exportError = errorRef.get();
+        if (exportError != null) {
+            throw exportError;
+        }
+    }
+
+    @FunctionalInterface
+    private interface IoTask {
+        void run() throws IOException;
     }
 }
