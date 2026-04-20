@@ -1,9 +1,12 @@
 package com.lucentflow.api.config;
 
 import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.info.Contact;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.info.License;
+import io.swagger.v3.oas.models.security.SecurityRequirement;
+import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.servers.Server;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -40,8 +43,9 @@ public class SwaggerConfig {
         return new OpenAPI()
                 .info(new Info()
                         .title("LucentFlow API")
-                        .description("API for querying whale transactions and blockchain synchronization status")
-                        .version("1.0.0")
+                        .description("Forensics and watchlist APIs for project-scoped Base monitoring. "
+                                + "All /api/v1/forensics and /api/v1/watchlist endpoints require X-Project-Key.")
+                        .version("1.2.0-STABLE")
                         .contact(new Contact()
                                 .name("LucentFlow Team")
                                 .email("info@lucentflow.io")
@@ -49,6 +53,13 @@ public class SwaggerConfig {
                         .license(new License()
                                 .name("MIT License")
                                 .url("https://opensource.org/licenses/MIT")))
+                .components(new Components().addSecuritySchemes("projectKey",
+                        new SecurityScheme()
+                                .type(SecurityScheme.Type.APIKEY)
+                                .in(SecurityScheme.In.HEADER)
+                                .name("X-Project-Key")
+                                .description("Project API key used for multi-project scope isolation.")))
+                .addSecurityItem(new SecurityRequirement().addList("projectKey"))
                 .servers(List.of(
                         new Server()
                                 .url("http://localhost:8080")

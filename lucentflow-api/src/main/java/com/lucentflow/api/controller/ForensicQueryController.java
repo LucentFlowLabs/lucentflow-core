@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -37,7 +38,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/forensics")
-@Tag(name = "Forensic Query API", description = "Forensic event query endpoints with dynamic filters")
+@Tag(name = "Forensic Query API", description = "Project-scoped forensic query and export endpoints.")
+@SecurityRequirement(name = "projectKey")
 public class ForensicQueryController {
 
     private static final int DEFAULT_PAGE = 0;

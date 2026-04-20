@@ -96,9 +96,11 @@ management:
     health:
       show-details: when_authorized
       status:
+        order: DOWN, OUT_OF_SERVICE, WARN, UP, UNKNOWN
         http-mapping:
           DOWN: 200
           OUT_OF_SERVICE: 200
+          WARN: 200
 
 ---
 spring:

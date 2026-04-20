@@ -44,14 +44,17 @@ public class WebhookAlertProvider implements AlertProvider {
     private final HttpClient httpClient;
     private final String webhookUrl;
     private final String secretToken;
+    private final WebhookDeliveryStatusTracker deliveryStatusTracker;
 
     public WebhookAlertProvider(
             ObjectMapper objectMapper,
+            WebhookDeliveryStatusTracker deliveryStatusTracker,
             @Value("${lucentflow.webhook.url:}") String webhookUrl,
             @Value("${lucentflow.webhook.secret-token:}") String secretToken,
             @Value("${lucentflow.webhook.connect-timeout-ms:5000}") long connectTimeoutMs
     ) {
         this.objectMapper = objectMapper;
+        this.deliveryStatusTracker = deliveryStatusTracker;
         this.webhookUrl = webhookUrl;
         this.secretToken = secretToken;
         this.httpClient = HttpClient.newBuilder()
@@ -112,10 +115,13 @@ public class WebhookAlertProvider implements AlertProvider {
                     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
                     int statusCode = response.statusCode();
                     if (statusCode >= 200 && statusCode < 300) {
+                        deliveryStatusTracker.markSuccess(context == null ? null : context.projectId());
                         return;
                     }
+                    deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
                     log.warn("[WEBHOOK] HTTP {} attempt {}/{} tx={}", statusCode, attempt, MAX_ATTEMPTS, tx.getHash());
                 } catch (Exception e) {
+                    deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
                     log.warn("[WEBHOOK] send attempt {}/{} failed tx={} err={}", attempt, MAX_ATTEMPTS, tx.getHash(), e.getMessage());
                 }
 
@@ -124,6 +130,7 @@ public class WebhookAlertProvider implements AlertProvider {
                 }
             }
         } catch (Exception e) {
+            deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
             log.warn("[WEBHOOK] payload/build failed tx={} err={}", tx.getHash(), e.getMessage());
         } finally {
             WEBHOOK_BULKHEAD.release();

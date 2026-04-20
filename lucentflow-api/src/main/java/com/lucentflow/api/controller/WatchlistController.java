@@ -6,6 +6,7 @@ import com.lucentflow.api.security.ProjectContext;
 import com.lucentflow.api.service.WatchlistService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -32,7 +33,8 @@ import java.util.Optional;
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/watchlist")
-@Tag(name = "Watchlist API", description = "CRUD operations for watchlist addresses")
+@Tag(name = "Watchlist API", description = "Project-scoped CRUD operations for watchlist addresses.")
+@SecurityRequirement(name = "projectKey")
 public class WatchlistController {
 
     private final WatchlistService watchlistService;

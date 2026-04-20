@@ -1,8 +1,10 @@
 package com.lucentflow.api.health;
 
+import com.lucentflow.analyzer.service.WebhookDeliveryStatusTracker;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.boot.actuate.health.Status;
 import org.springframework.stereotype.Component;
 import org.web3j.protocol.Web3j;
 import org.web3j.protocol.core.Response;
@@ -27,14 +29,17 @@ public class JsonRpcHealthIndicator implements HealthIndicator {
     private static final int RPC_TIMEOUT_SECONDS = 10;
 
     private final Web3j web3j;
+    private final WebhookDeliveryStatusTracker webhookDeliveryStatusTracker;
     private final String proxyHost;
     private final String proxyPort;
 
     public JsonRpcHealthIndicator(
             Web3j web3j,
+            WebhookDeliveryStatusTracker webhookDeliveryStatusTracker,
             @Value("${PROXY_HOST:}") String proxyHost,
             @Value("${PROXY_PORT:}") String proxyPort) {
         this.web3j = web3j;
+        this.webhookDeliveryStatusTracker = webhookDeliveryStatusTracker;
         this.proxyHost = proxyHost;
         this.proxyPort = proxyPort;
     }
@@ -71,9 +76,19 @@ public class JsonRpcHealthIndicator implements HealthIndicator {
                         .build();
             }
 
-            return Health.up()
+            WebhookDeliveryStatusTracker.Snapshot webhookSnapshot = webhookDeliveryStatusTracker.snapshot();
+            boolean webhookDegraded = webhookSnapshot.lastFailureAt() != null;
+            Health.Builder builder = webhookDegraded
+                    ? Health.status(new Status("WARN"))
+                    : Health.up();
+            return builder
                     .withDetail("rpc", "reachable")
                     .withDetail("blockNumber", ethBlockNumber.getBlockNumber())
+                    .withDetail("webhookDelivery", webhookDegraded ? "degraded" : "healthy")
+                    .withDetail("webhookFailures", webhookSnapshot.failureCount())
+                    .withDetail("webhookSuccess", webhookSnapshot.successCount())
+                    .withDetail("webhookLastFailureAt", webhookSnapshot.lastFailureAt())
+                    .withDetail("webhookProjectFailures", webhookSnapshot.projectLastFailureAt())
                     .build();
         } catch (TimeoutException e) {
             return downWithProxy()

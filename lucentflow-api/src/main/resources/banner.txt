@@ -1,10 +1,10 @@
 ${AnsiColor.BRIGHT_BLUE}
-  _                                  _   _____ _               
- | |    _   _  ___ ___ _ __  _   _  | |_|  ___| | _____      __
- | |   | | | |/ __/ _ \ '_ \| | | | | __| |_  | |/ _ \ \ /\ / /
- | |___| |_| | (_|  __/ | | | |_| | | |_|  _| | | (_) \ V  V / 
- |_____|\__,_|\___\___|_| |_|\__,_|  \__|_|   |_|\___/ \_/\_/  
+  _               ____            _   ______ _               
+ | |    _   _ ___|  _ \ ___  __ _| |_/ / ___| | _____      __
+ | |   | | | / __| |_) / _ \/ _` | __| \___ \ |/ _ \ \ /\ / /
+ | |___| |_| \__ \  _ <  __/ (_| | |_| |___) | | (_) \ V  V / 
+ |_____|\__,_|___/_| \_\___|\__,_|\__|_|____/|_|\___/ \_/\_/  
 ${AnsiColor.BRIGHT_CYAN}
- >>> ASSET SECURITY & FORENSIC SENTINEL | v1.1.0-RELEASE
- >>> Powered by Java 21 Virtual Threads & TCV Logic
+ >>> ASSET SECURITY & FORENSIC SENTINEL | v1.2.0-STABLE
+ >>> Powered by Java 21 Virtual Threads, Watchlist & Project Scoping
 ${AnsiColor.DEFAULT}
