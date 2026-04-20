@@ -6,10 +6,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.PostConstruct;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -33,6 +37,8 @@ public class WebhookAlertProvider implements AlertProvider {
     private static final long[] BACKOFF_MS = new long[]{1_000L, 2_000L, 4_000L};
     private static final Semaphore WEBHOOK_BULKHEAD = new Semaphore(50);
     private static final ExecutorService WEBHOOK_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
+    private static final String SIGNATURE_HEADER = "X-LucentFlow-Signature";
+    private static final String HMAC_SHA256 = "HmacSHA256";
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -54,6 +60,16 @@ public class WebhookAlertProvider implements AlertProvider {
                 .build();
     }
 
+    @PostConstruct
+    void logSignatureVerificationGuide() {
+        if (secretToken == null || secretToken.isBlank()) {
+            return;
+        }
+        log.info("[WEBHOOK] Signature enabled. Header={} format=t=<timestamp>,v1=<hmac_sha256_hex>", SIGNATURE_HEADER);
+        log.info("[WEBHOOK] Node.js verify sample: const payload=`${{timestamp}}.${{rawBody}}`; const sig=crypto.createHmac('sha256', secret).update(payload).digest('hex');");
+        log.info("[WEBHOOK] Java verify sample: Mac mac=Mac.getInstance(\"HmacSHA256\"); mac.init(new SecretKeySpec(secret.getBytes(UTF_8),\"HmacSHA256\"));");
+    }
+
     @Override
     public void sendHighRiskAlertAsync(WhaleTransaction tx) {
         if (tx == null || webhookUrl == null || webhookUrl.isBlank()) {
@@ -73,13 +89,14 @@ public class WebhookAlertProvider implements AlertProvider {
             URI targetUri = URI.create(webhookUrl.trim());
 
             for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                String timestamp = String.valueOf(Instant.now().getEpochSecond());
                 HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                         .uri(targetUri)
                         .timeout(Duration.ofSeconds(8))
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(payload));
                 if (secretToken != null && !secretToken.isBlank()) {
-                    requestBuilder.header("X-Webhook-Token", secretToken.trim());
+                    requestBuilder.header(SIGNATURE_HEADER, buildSignatureHeader(timestamp, payload));
                 }
                 HttpRequest request = requestBuilder.build();
                 try {
@@ -125,5 +142,22 @@ public class WebhookAlertProvider implements AlertProvider {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private String buildSignatureHeader(String timestamp, String requestBody) throws Exception {
+        String signedPayload = timestamp + "." + requestBody;
+        Mac mac = Mac.getInstance(HMAC_SHA256);
+        SecretKeySpec secretKeySpec = new SecretKeySpec(secretToken.trim().getBytes(StandardCharsets.UTF_8), HMAC_SHA256);
+        mac.init(secretKeySpec);
+        byte[] signatureBytes = mac.doFinal(signedPayload.getBytes(StandardCharsets.UTF_8));
+        return "t=" + timestamp + ",v1=" + toHex(signatureBytes);
+    }
+
+    private String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 }
