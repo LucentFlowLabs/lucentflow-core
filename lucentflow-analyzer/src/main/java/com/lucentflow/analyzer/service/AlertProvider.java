@@ -10,5 +10,5 @@ import com.lucentflow.common.entity.WhaleTransaction;
  */
 public interface AlertProvider {
 
-    void sendHighRiskAlertAsync(WhaleTransaction tx);
+    void sendHighRiskAlertAsync(WhaleTransaction tx, AlertDispatchContext context);
 }

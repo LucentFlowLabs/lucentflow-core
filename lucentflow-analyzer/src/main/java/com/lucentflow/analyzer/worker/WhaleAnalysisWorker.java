@@ -183,10 +183,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                             try {
                                 whaleDatabaseSink.saveWhaleTransactions(whaleBatch);
                                 for (WhaleTransaction w : whaleBatch) {
-                                    Integer rs = w.getRiskScore();
-                                    if (rs != null && rs >= 70) {
-                                        alertService.sendHighRiskAlertAsync(w);
-                                    }
+                                    alertService.sendAlertIfNeeded(w);
                                 }
                             } finally {
                                 dbSaveSemaphore.release();

@@ -63,6 +63,8 @@ lucentflow:
     url: ${LUCENTFLOW_WEBHOOK_URL:}
     secret-token: ${LUCENTFLOW_WEBHOOK_SECRET_TOKEN:}
     connect-timeout-ms: ${LUCENTFLOW_WEBHOOK_CONNECT_TIMEOUT_MS:5000}
+  alert:
+    global-risk-threshold: ${LUCENTFLOW_ALERT_GLOBAL_RISK_THRESHOLD:70}
   webhook:
     url: ${LUCENTFLOW_WEBHOOK_URL:}
     secret-token: ${LUCENTFLOW_WEBHOOK_SECRET_TOKEN:}

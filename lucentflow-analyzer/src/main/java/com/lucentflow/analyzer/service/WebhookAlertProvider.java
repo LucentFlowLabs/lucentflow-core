@@ -71,21 +71,21 @@ public class WebhookAlertProvider implements AlertProvider {
     }
 
     @Override
-    public void sendHighRiskAlertAsync(WhaleTransaction tx) {
+    public void sendHighRiskAlertAsync(WhaleTransaction tx, AlertDispatchContext context) {
         if (tx == null || webhookUrl == null || webhookUrl.isBlank()) {
             return;
         }
-        CompletableFuture.runAsync(() -> doSendWithRetry(tx), WEBHOOK_EXECUTOR);
+        CompletableFuture.runAsync(() -> doSendWithRetry(tx, context), WEBHOOK_EXECUTOR);
     }
 
-    private void doSendWithRetry(WhaleTransaction tx) {
+    private void doSendWithRetry(WhaleTransaction tx, AlertDispatchContext context) {
         boolean acquired = WEBHOOK_BULKHEAD.tryAcquire();
         if (!acquired) {
             log.warn("[WEBHOOK] Bulkhead saturated (50). Dropping tx {}", tx.getHash());
             return;
         }
         try {
-            String payload = objectMapper.writeValueAsString(buildPayload(tx));
+            String payload = objectMapper.writeValueAsString(buildPayload(tx, context));
             URI targetUri = URI.create(webhookUrl.trim());
 
             for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -121,12 +121,16 @@ public class WebhookAlertProvider implements AlertProvider {
         }
     }
 
-    private Map<String, Object> buildPayload(WhaleTransaction tx) {
+    private Map<String, Object> buildPayload(WhaleTransaction tx, AlertDispatchContext context) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("event_type", "HIGH_RISK_WHALE_EVENT");
         payload.put("timestamp", Instant.now().toString());
         payload.put("transaction_hash", tx.getHash());
         payload.put("deep_link", tx.getHash() == null ? null : "https://basescan.org/tx/" + tx.getHash());
+        payload.put("is_watchlist_hit", context != null && context.watchlistHit());
+        payload.put("watchlist_label", context == null ? null : context.watchlistLabel());
+        payload.put("watchlist_category", context == null ? null : context.watchlistCategory());
+        payload.put("watchlist_address", context == null ? null : context.watchlistAddress());
 
         Map<String, Object> riskAssessment = new LinkedHashMap<>();
         riskAssessment.put("risk_score", tx.getRiskScore());

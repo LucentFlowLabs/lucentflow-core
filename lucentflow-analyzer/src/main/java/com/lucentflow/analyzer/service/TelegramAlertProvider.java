@@ -43,19 +43,19 @@ public class TelegramAlertProvider implements AlertProvider {
     }
 
     @Override
-    public void sendHighRiskAlertAsync(WhaleTransaction tx) {
+    public void sendHighRiskAlertAsync(WhaleTransaction tx, AlertDispatchContext context) {
         if (tx == null) {
             return;
         }
         if (botToken == null || botToken.isBlank() || chatId == null || chatId.isBlank()) {
             return;
         }
-        CompletableFuture.runAsync(() -> sendMessageBlocking(tx), VIRTUAL_ALERT_EXECUTOR);
+        CompletableFuture.runAsync(() -> sendMessageBlocking(tx, context), VIRTUAL_ALERT_EXECUTOR);
     }
 
-    private void sendMessageBlocking(WhaleTransaction tx) {
+    private void sendMessageBlocking(WhaleTransaction tx, AlertDispatchContext context) {
         String url = "https://api.telegram.org/bot" + botToken.trim() + "/sendMessage";
-        String bodyJson = buildSendMessageJson(chatId.trim(), formatMessage(tx));
+        String bodyJson = buildSendMessageJson(chatId.trim(), formatMessage(tx, context));
         RequestBody body = RequestBody.create(bodyJson, JSON);
         Request request = new Request.Builder().url(url).post(body).build();
         try (Response response = okHttpClient.newCall(request).execute()) {
@@ -89,7 +89,7 @@ public class TelegramAlertProvider implements AlertProvider {
         return "\"" + escaped + "\"";
     }
 
-    private String formatMessage(WhaleTransaction tx) {
+    private String formatMessage(WhaleTransaction tx, AlertDispatchContext context) {
         int riskScore = tx.getRiskScore() != null ? tx.getRiskScore() : 0;
         String riskStatus = Objects.requireNonNullElse(tx.getRugRiskLevel(), mapScoreToStatus(riskScore));
         String reasonSummary = escapeHtml(formatReasons(tx.getRiskReasons()));
@@ -97,16 +97,20 @@ public class TelegramAlertProvider implements AlertProvider {
         String from = escapeHtml(tx.getFromAddress() != null ? tx.getFromAddress() : "-");
         String hash = tx.getHash() != null ? tx.getHash() : "";
         String txLink = "https://basescan.org/tx/" + hash;
+        String watchlistSummary = context != null && context.watchlistHit()
+                ? "YES (" + escapeHtml(context.watchlistLabel()) + ")"
+                : "NO";
 
         return """
                 <b>🚨 [LucentFlow Security Sentinel]</b>
                 --------------------------------
                 <b>Risk Score:</b> %d/100 (%s)
                 <b>Audit Detail:</b> %s
+                <b>Watchlist Hit:</b> %s
                 <b>Value:</b> %s ETH
                 <b>Initiator:</b> <code>%s</code>
                 <b>Action:</b> <a href="%s">Verify on Basescan</a>
-                """.formatted(riskScore, escapeHtml(riskStatus), reasonSummary, valueEth, from, txLink);
+                """.formatted(riskScore, escapeHtml(riskStatus), reasonSummary, watchlistSummary, valueEth, from, txLink);
     }
 
     private static String formatReasons(Map<String, Integer> reasons) {
