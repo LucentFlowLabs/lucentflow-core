@@ -59,6 +59,14 @@ lucentflow:
   telegram:
     bot-token: ${TELEGRAM_BOT_TOKEN:}
     chat-id: ${TELEGRAM_CHAT_ID:}
+  webhook:
+    url: ${LUCENTFLOW_WEBHOOK_URL:}
+    secret-token: ${LUCENTFLOW_WEBHOOK_SECRET_TOKEN:}
+    connect-timeout-ms: ${LUCENTFLOW_WEBHOOK_CONNECT_TIMEOUT_MS:5000}
+  webhook:
+    url: ${LUCENTFLOW_WEBHOOK_URL:}
+    secret-token: ${LUCENTFLOW_WEBHOOK_SECRET_TOKEN:}
+    connect-timeout-ms: ${LUCENTFLOW_WEBHOOK_CONNECT_TIMEOUT_MS:5000}
 
 logging:
   file:
