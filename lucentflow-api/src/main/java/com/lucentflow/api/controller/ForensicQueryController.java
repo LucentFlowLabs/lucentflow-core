@@ -1,6 +1,7 @@
 package com.lucentflow.api.controller;
 
 import com.lucentflow.api.dto.ForensicEventDTO;
+import com.lucentflow.api.security.ProjectContext;
 import com.lucentflow.api.service.ForensicQueryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -65,6 +66,8 @@ public class ForensicQueryController {
             @RequestParam(required = false) String bytecodeHash,
             @Parameter(description = "Keyword match inside JSONB risk reasons", example = "REVERT_PROBE")
             @RequestParam(required = false) String reason,
+            @Parameter(description = "Project scope ID", example = "1")
+            @RequestParam(required = false) Long projectId,
             @Parameter(description = "Page number, default 0", example = "0")
             @RequestParam(defaultValue = "0") Integer page,
             @Parameter(description = "Page size, default 20, max 100", example = "20")
@@ -78,8 +81,12 @@ public class ForensicQueryController {
         }
 
         PageRequest pageable = PageRequest.of(resolvedPage, resolvedSize, Sort.by(Sort.Direction.DESC, "timestamp"));
+        Long effectiveProjectId = resolveProjectScope(projectId);
+        if (projectId != null && effectiveProjectId == null) {
+            return ResponseEntity.status(403).build();
+        }
         Page<ForensicEventDTO> result = forensicQueryService.queryEvents(
-                minRiskScore, maxRiskScore, address, bytecodeHash, reason, pageable
+                minRiskScore, maxRiskScore, address, bytecodeHash, reason, effectiveProjectId, pageable
         );
         return ResponseEntity.ok(result);
     }
@@ -92,14 +99,19 @@ public class ForensicQueryController {
             @RequestParam(required = false) Integer maxRiskScore,
             @RequestParam(required = false) String address,
             @RequestParam(required = false) String bytecodeHash,
-            @RequestParam(required = false) String reason
+            @RequestParam(required = false) String reason,
+            @RequestParam(required = false) Long projectId
     ) {
         if (minRiskScore != null && maxRiskScore != null && minRiskScore > maxRiskScore) {
             return ResponseEntity.badRequest().build();
         }
+        Long effectiveProjectId = resolveProjectScope(projectId);
+        if (projectId != null && effectiveProjectId == null) {
+            return ResponseEntity.status(403).build();
+        }
         String filename = "lucentflow-forensics-" + EXPORT_FILENAME_TIME.format(Instant.now()) + ".json";
         StreamingResponseBody body = outputStream -> executeOnVirtualThread(() ->
-                forensicQueryService.exportJson(minRiskScore, maxRiskScore, address, bytecodeHash, reason, outputStream));
+                forensicQueryService.exportJson(minRiskScore, maxRiskScore, address, bytecodeHash, reason, effectiveProjectId, outputStream));
 
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
@@ -115,14 +127,19 @@ public class ForensicQueryController {
             @RequestParam(required = false) Integer maxRiskScore,
             @RequestParam(required = false) String address,
             @RequestParam(required = false) String bytecodeHash,
-            @RequestParam(required = false) String reason
+            @RequestParam(required = false) String reason,
+            @RequestParam(required = false) Long projectId
     ) {
         if (minRiskScore != null && maxRiskScore != null && minRiskScore > maxRiskScore) {
             return ResponseEntity.badRequest().build();
         }
+        Long effectiveProjectId = resolveProjectScope(projectId);
+        if (projectId != null && effectiveProjectId == null) {
+            return ResponseEntity.status(403).build();
+        }
         String filename = "lucentflow-forensics-" + EXPORT_FILENAME_TIME.format(Instant.now()) + ".csv";
         StreamingResponseBody body = outputStream -> executeOnVirtualThread(() ->
-                forensicQueryService.exportCsv(minRiskScore, maxRiskScore, address, bytecodeHash, reason, outputStream));
+                forensicQueryService.exportCsv(minRiskScore, maxRiskScore, address, bytecodeHash, reason, effectiveProjectId, outputStream));
 
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
@@ -159,5 +176,16 @@ public class ForensicQueryController {
     @FunctionalInterface
     private interface IoTask {
         void run() throws IOException;
+    }
+
+    private Long resolveProjectScope(Long requestedProjectId) {
+        Long contextProjectId = ProjectContext.getProjectId();
+        if (requestedProjectId == null) {
+            return contextProjectId;
+        }
+        if (contextProjectId == null || !requestedProjectId.equals(contextProjectId)) {
+            return null;
+        }
+        return contextProjectId;
     }
 }

@@ -7,7 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Optional;
+import java.util.ArrayList;
 
 /**
  * Orchestrates high-risk alert fan-out to all configured providers.
@@ -33,27 +33,42 @@ public class AlertService {
         if (tx == null) {
             return;
         }
-        Optional<WatchlistCacheService.WatchlistHit> hitOpt =
-                watchlistCacheService.firstHit(tx.getFromAddress(), tx.getToAddress());
+        List<WatchlistCacheService.WatchlistHit> hits =
+                watchlistCacheService.findHits(tx.getFromAddress(), tx.getToAddress());
 
         int riskScore = tx.getRiskScore() == null ? 0 : tx.getRiskScore();
-        boolean isWatchlistHit = hitOpt.isPresent();
+        boolean isWatchlistHit = !hits.isEmpty();
         if (!isWatchlistHit && riskScore < Math.max(0, globalRiskThreshold)) {
             return;
         }
-
-        AlertDispatchContext context = hitOpt
-                .map(hit -> new AlertDispatchContext(true, hit.label(), hit.category(), hit.address()))
-                .orElse(new AlertDispatchContext(false, null, null, null));
+        List<AlertDispatchContext> contexts = new ArrayList<>();
+        if (hits.isEmpty()) {
+            contexts.add(new AlertDispatchContext(false, null, null, null, null, null));
+        } else {
+            for (WatchlistCacheService.WatchlistHit hit : hits) {
+                contexts.add(new AlertDispatchContext(
+                        true,
+                        hit.label(),
+                        hit.category(),
+                        hit.address(),
+                        hit.projectId(),
+                        hit.projectWebhookUrl()));
+            }
+        }
 
         for (AlertProvider alertProvider : alertProviders) {
-            try {
-                alertProvider.sendHighRiskAlertAsync(tx, context);
-            } catch (Exception e) {
-                log.warn("[ALERT] provider={} failed for tx={} err={}",
-                        alertProvider.getClass().getSimpleName(),
-                        tx.getHash(),
-                        e.getMessage());
+            List<AlertDispatchContext> providerContexts = alertProvider.supportsProjectScopedDispatch()
+                    ? contexts
+                    : List.of(contexts.get(0));
+            for (AlertDispatchContext context : providerContexts) {
+                try {
+                    alertProvider.sendHighRiskAlertAsync(tx, context);
+                } catch (Exception e) {
+                    log.warn("[ALERT] provider={} failed for tx={} err={}",
+                            alertProvider.getClass().getSimpleName(),
+                            tx.getHash(),
+                            e.getMessage());
+                }
             }
         }
     }

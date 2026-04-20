@@ -10,6 +10,8 @@ public record AlertDispatchContext(
         boolean watchlistHit,
         String watchlistLabel,
         String watchlistCategory,
-        String watchlistAddress
+        String watchlistAddress,
+        Long projectId,
+        String projectWebhookUrl
 ) {
 }

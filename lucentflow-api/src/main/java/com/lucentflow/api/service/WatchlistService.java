@@ -3,7 +3,9 @@ package com.lucentflow.api.service;
 import com.lucentflow.analyzer.service.WatchlistCacheService;
 import com.lucentflow.api.dto.WatchlistDTO;
 import com.lucentflow.api.dto.WatchlistUpsertRequest;
+import com.lucentflow.common.entity.Project;
 import com.lucentflow.common.entity.Watchlist;
+import com.lucentflow.common.repository.ProjectRepository;
 import com.lucentflow.common.repository.WatchlistRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -24,25 +26,31 @@ import java.util.Optional;
 public class WatchlistService {
 
     private final WatchlistRepository watchlistRepository;
+    private final ProjectRepository projectRepository;
     private final WatchlistCacheService watchlistCacheService;
 
     @Transactional(readOnly = true)
-    public List<WatchlistDTO> listAll() {
-        return watchlistRepository.findAll().stream().map(this::toDto).toList();
+    public List<WatchlistDTO> listAll(Long projectId) {
+        return watchlistRepository.findAllByProjectId(projectId).stream().map(this::toDto).toList();
     }
 
     @Transactional(readOnly = true)
-    public Optional<WatchlistDTO> getById(Long id) {
-        return watchlistRepository.findById(id).map(this::toDto);
+    public Optional<WatchlistDTO> getById(Long id, Long projectId) {
+        return watchlistRepository.findByIdAndProjectId(id, projectId).map(this::toDto);
     }
 
     @Transactional
-    public WatchlistDTO create(WatchlistUpsertRequest request) {
+    public WatchlistDTO create(WatchlistUpsertRequest request, Long projectId) {
+        Project project = requireProject(projectId);
         String normalizedAddress = normalizeAddress(request.address());
+        if (watchlistRepository.existsByAddressAndProjectId(normalizedAddress, projectId)) {
+            throw new IllegalArgumentException("Address already exists in project watchlist");
+        }
         Watchlist item = Watchlist.builder()
                 .address(normalizedAddress)
                 .label(safeTrim(request.label()))
                 .category(safeTrim(request.category()))
+                .project(project)
                 .build();
         Watchlist saved = watchlistRepository.save(item);
         watchlistCacheService.refresh();
@@ -50,13 +58,18 @@ public class WatchlistService {
     }
 
     @Transactional
-    public Optional<WatchlistDTO> update(Long id, WatchlistUpsertRequest request) {
-        Optional<Watchlist> existingOpt = watchlistRepository.findById(id);
+    public Optional<WatchlistDTO> update(Long id, WatchlistUpsertRequest request, Long projectId) {
+        Optional<Watchlist> existingOpt = watchlistRepository.findByIdAndProjectId(id, projectId);
         if (existingOpt.isEmpty()) {
             return Optional.empty();
         }
         Watchlist existing = existingOpt.get();
-        existing.setAddress(normalizeAddress(request.address()));
+        String normalizedAddress = normalizeAddress(request.address());
+        if (!normalizedAddress.equals(existing.getAddress())
+                && watchlistRepository.existsByAddressAndProjectId(normalizedAddress, projectId)) {
+            throw new IllegalArgumentException("Address already exists in project watchlist");
+        }
+        existing.setAddress(normalizedAddress);
         existing.setLabel(safeTrim(request.label()));
         existing.setCategory(safeTrim(request.category()));
         Watchlist saved = watchlistRepository.save(existing);
@@ -65,11 +78,12 @@ public class WatchlistService {
     }
 
     @Transactional
-    public boolean delete(Long id) {
-        if (!watchlistRepository.existsById(id)) {
+    public boolean delete(Long id, Long projectId) {
+        Optional<Watchlist> existing = watchlistRepository.findByIdAndProjectId(id, projectId);
+        if (existing.isEmpty()) {
             return false;
         }
-        watchlistRepository.deleteById(id);
+        watchlistRepository.delete(existing.get());
         watchlistCacheService.refresh();
         return true;
     }
@@ -77,6 +91,7 @@ public class WatchlistService {
     private WatchlistDTO toDto(Watchlist item) {
         return new WatchlistDTO(
                 item.getId(),
+                item.getProject() == null ? null : item.getProject().getId(),
                 item.getAddress(),
                 item.getLabel(),
                 item.getCategory(),
@@ -96,5 +111,13 @@ public class WatchlistService {
             throw new IllegalArgumentException("Label and category are required");
         }
         return value.trim();
+    }
+
+    private Project requireProject(Long projectId) {
+        if (projectId == null) {
+            throw new IllegalArgumentException("Project scope is required");
+        }
+        return projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("Project not found"));
     }
 }

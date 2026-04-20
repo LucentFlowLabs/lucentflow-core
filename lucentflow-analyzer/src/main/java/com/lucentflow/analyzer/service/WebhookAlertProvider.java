@@ -78,6 +78,11 @@ public class WebhookAlertProvider implements AlertProvider {
         CompletableFuture.runAsync(() -> doSendWithRetry(tx, context), WEBHOOK_EXECUTOR);
     }
 
+    @Override
+    public boolean supportsProjectScopedDispatch() {
+        return true;
+    }
+
     private void doSendWithRetry(WhaleTransaction tx, AlertDispatchContext context) {
         boolean acquired = WEBHOOK_BULKHEAD.tryAcquire();
         if (!acquired) {
@@ -85,8 +90,12 @@ public class WebhookAlertProvider implements AlertProvider {
             return;
         }
         try {
+            String targetUrl = resolveTargetWebhookUrl(context);
+            if (targetUrl == null || targetUrl.isBlank()) {
+                return;
+            }
             String payload = objectMapper.writeValueAsString(buildPayload(tx, context));
-            URI targetUri = URI.create(webhookUrl.trim());
+            URI targetUri = URI.create(targetUrl);
 
             for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
                 String timestamp = String.valueOf(Instant.now().getEpochSecond());
@@ -131,6 +140,7 @@ public class WebhookAlertProvider implements AlertProvider {
         payload.put("watchlist_label", context == null ? null : context.watchlistLabel());
         payload.put("watchlist_category", context == null ? null : context.watchlistCategory());
         payload.put("watchlist_address", context == null ? null : context.watchlistAddress());
+        payload.put("project_id", context == null ? null : context.projectId());
 
         Map<String, Object> riskAssessment = new LinkedHashMap<>();
         riskAssessment.put("risk_score", tx.getRiskScore());
@@ -138,6 +148,16 @@ public class WebhookAlertProvider implements AlertProvider {
         riskAssessment.put("reasons", tx.getRiskReasons() == null ? Map.of() : tx.getRiskReasons());
         payload.put("risk_assessment", riskAssessment);
         return payload;
+    }
+
+    private String resolveTargetWebhookUrl(AlertDispatchContext context) {
+        if (context != null && context.projectWebhookUrl() != null && !context.projectWebhookUrl().isBlank()) {
+            return context.projectWebhookUrl().trim();
+        }
+        if (webhookUrl == null || webhookUrl.isBlank()) {
+            return null;
+        }
+        return webhookUrl.trim();
     }
 
     private void sleepQuietly(long millis) {

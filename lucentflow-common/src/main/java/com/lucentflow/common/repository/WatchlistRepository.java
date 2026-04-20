@@ -4,6 +4,7 @@ import com.lucentflow.common.entity.Watchlist;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -18,4 +19,10 @@ public interface WatchlistRepository extends JpaRepository<Watchlist, Long> {
     Optional<Watchlist> findByAddress(String address);
 
     boolean existsByAddress(String address);
+
+    List<Watchlist> findAllByProjectId(Long projectId);
+
+    Optional<Watchlist> findByIdAndProjectId(Long id, Long projectId);
+
+    boolean existsByAddressAndProjectId(String address, Long projectId);
 }

@@ -4,7 +4,9 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lucentflow.api.dto.ForensicEventDTO;
 import com.lucentflow.api.spec.WhaleTransactionSpecifications;
+import com.lucentflow.common.entity.Watchlist;
 import com.lucentflow.common.entity.WhaleTransaction;
+import com.lucentflow.common.repository.WatchlistRepository;
 import com.lucentflow.indexer.repository.WhaleTransactionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -21,7 +23,9 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -38,6 +42,7 @@ public class ForensicQueryService {
     private static final byte[] UTF8_BOM = new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
 
     private final WhaleTransactionRepository whaleTransactionRepository;
+    private final WatchlistRepository watchlistRepository;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -47,9 +52,10 @@ public class ForensicQueryService {
             String address,
             String bytecodeHash,
             String reason,
+            Long projectId,
             Pageable pageable
     ) {
-        Specification<WhaleTransaction> spec = buildSpecification(minRiskScore, maxRiskScore, address, bytecodeHash, reason);
+        Specification<WhaleTransaction> spec = buildSpecification(minRiskScore, maxRiskScore, address, bytecodeHash, reason, projectId);
         return whaleTransactionRepository.findAll(spec, pageable).map(this::toDto);
     }
 
@@ -60,9 +66,10 @@ public class ForensicQueryService {
             String address,
             String bytecodeHash,
             String reason,
+            Long projectId,
             OutputStream outputStream
     ) throws IOException {
-        Specification<WhaleTransaction> spec = buildSpecification(minRiskScore, maxRiskScore, address, bytecodeHash, reason);
+        Specification<WhaleTransaction> spec = buildSpecification(minRiskScore, maxRiskScore, address, bytecodeHash, reason, projectId);
         try (Stream<WhaleTransaction> stream = streamBySpecification(spec);
              JsonGenerator generator = objectMapper.getFactory().createGenerator(outputStream)) {
             generator.writeStartArray();
@@ -87,9 +94,10 @@ public class ForensicQueryService {
             String address,
             String bytecodeHash,
             String reason,
+            Long projectId,
             OutputStream outputStream
     ) throws IOException {
-        Specification<WhaleTransaction> spec = buildSpecification(minRiskScore, maxRiskScore, address, bytecodeHash, reason);
+        Specification<WhaleTransaction> spec = buildSpecification(minRiskScore, maxRiskScore, address, bytecodeHash, reason, projectId);
         outputStream.write(UTF8_BOM);
         try (Stream<WhaleTransaction> stream = streamBySpecification(spec);
              BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(outputStream, StandardCharsets.UTF_8))) {
@@ -114,13 +122,23 @@ public class ForensicQueryService {
             Integer maxRiskScore,
             String address,
             String bytecodeHash,
-            String reason
+            String reason,
+            Long projectId
     ) {
-        return Specification.where(WhaleTransactionSpecifications.minRiskScore(minRiskScore))
+        Specification<WhaleTransaction> base = Specification.where(WhaleTransactionSpecifications.minRiskScore(minRiskScore))
                 .and(WhaleTransactionSpecifications.maxRiskScore(maxRiskScore))
                 .and(WhaleTransactionSpecifications.address(address))
                 .and(WhaleTransactionSpecifications.bytecodeHash(bytecodeHash))
                 .and(WhaleTransactionSpecifications.reasonContains(reason));
+        if (projectId == null) {
+            return base;
+        }
+        Set<String> addresses = watchlistRepository.findAllByProjectId(projectId).stream()
+                .map(Watchlist::getAddress)
+                .filter(a -> a != null && !a.isBlank())
+                .map(a -> a.toLowerCase(Locale.ROOT))
+                .collect(java.util.stream.Collectors.toSet());
+        return base.and(WhaleTransactionSpecifications.addressInSet(addresses));
     }
 
     private Stream<WhaleTransaction> streamBySpecification(Specification<WhaleTransaction> spec) {

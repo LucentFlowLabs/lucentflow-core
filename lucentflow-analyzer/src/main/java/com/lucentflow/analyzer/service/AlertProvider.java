@@ -11,4 +11,8 @@ import com.lucentflow.common.entity.WhaleTransaction;
 public interface AlertProvider {
 
     void sendHighRiskAlertAsync(WhaleTransaction tx, AlertDispatchContext context);
+
+    default boolean supportsProjectScopedDispatch() {
+        return false;
+    }
 }

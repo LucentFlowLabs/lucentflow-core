@@ -3,6 +3,8 @@ package com.lucentflow.api.spec;
 import com.lucentflow.common.entity.WhaleTransaction;
 import org.springframework.data.jpa.domain.Specification;
 
+import java.util.Set;
+
 /**
  * Specification factory for forensic whale event filters.
  *
@@ -51,6 +53,17 @@ public final class WhaleTransactionSpecifications {
             }
             String likePattern = "%" + reason.trim().toLowerCase() + "%";
             return cb.like(cb.lower(root.get("riskReasons").as(String.class)), likePattern);
+        };
+    }
+
+    public static Specification<WhaleTransaction> addressInSet(Set<String> addresses) {
+        return (root, query, cb) -> {
+            if (addresses == null || addresses.isEmpty()) {
+                return cb.disjunction();
+            }
+            var fromExpr = cb.lower(root.get("fromAddress"));
+            var toExpr = cb.lower(root.get("toAddress"));
+            return cb.or(fromExpr.in(addresses), toExpr.in(addresses));
         };
     }
 }

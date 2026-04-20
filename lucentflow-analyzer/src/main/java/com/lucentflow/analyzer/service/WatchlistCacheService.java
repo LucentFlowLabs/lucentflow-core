@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Locale;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class WatchlistCacheService {
 
     private final WatchlistRepository watchlistRepository;
-    private final ConcurrentHashMap<String, WatchlistMeta> cache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentHashMap<Long, WatchlistMeta>> cache = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void initialize() {
@@ -34,11 +36,17 @@ public class WatchlistCacheService {
 
     @Transactional(readOnly = true)
     public synchronized void refresh() {
-        Map<String, WatchlistMeta> latest = new ConcurrentHashMap<>();
+        Map<String, ConcurrentHashMap<Long, WatchlistMeta>> latest = new ConcurrentHashMap<>();
         for (Watchlist item : watchlistRepository.findAll()) {
             String normalized = normalize(item.getAddress());
-            if (normalized != null) {
-                latest.put(normalized, new WatchlistMeta(item.getLabel(), item.getCategory()));
+            Long projectId = item.getProject() == null ? null : item.getProject().getId();
+            if (normalized != null && projectId != null) {
+                latest.computeIfAbsent(normalized, key -> new ConcurrentHashMap<>())
+                        .put(projectId, new WatchlistMeta(
+                                item.getLabel(),
+                                item.getCategory(),
+                                item.getProject().getWebhookUrl()
+                        ));
             }
         }
         cache.clear();
@@ -48,25 +56,47 @@ public class WatchlistCacheService {
 
     public boolean isWatched(String address) {
         String normalized = normalize(address);
-        return normalized != null && cache.containsKey(normalized);
+        return normalized != null && cache.containsKey(normalized) && !cache.get(normalized).isEmpty();
     }
 
     public Optional<WatchlistHit> firstHit(String fromAddress, String toAddress) {
+        List<WatchlistHit> hits = findHits(fromAddress, toAddress);
+        if (hits.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(hits.get(0));
+    }
+
+    public List<WatchlistHit> findHits(String fromAddress, String toAddress) {
+        List<WatchlistHit> results = new ArrayList<>();
         String from = normalize(fromAddress);
         if (from != null) {
-            WatchlistMeta fromMeta = cache.get(from);
-            if (fromMeta != null) {
-                return Optional.of(new WatchlistHit(from, fromMeta.label(), fromMeta.category()));
-            }
+            results.addAll(projectHits(from));
         }
         String to = normalize(toAddress);
         if (to != null) {
-            WatchlistMeta toMeta = cache.get(to);
-            if (toMeta != null) {
-                return Optional.of(new WatchlistHit(to, toMeta.label(), toMeta.category()));
-            }
+            results.addAll(projectHits(to));
         }
-        return Optional.empty();
+        return results;
+    }
+
+    private List<WatchlistHit> projectHits(String address) {
+        ConcurrentHashMap<Long, WatchlistMeta> projectMap = cache.get(address);
+        if (projectMap == null || projectMap.isEmpty()) {
+            return List.of();
+        }
+        List<WatchlistHit> hits = new ArrayList<>();
+        for (Map.Entry<Long, WatchlistMeta> entry : projectMap.entrySet()) {
+            WatchlistMeta meta = entry.getValue();
+            hits.add(new WatchlistHit(
+                    address,
+                    meta.label(),
+                    meta.category(),
+                    entry.getKey(),
+                    meta.projectWebhookUrl()
+            ));
+        }
+        return hits;
     }
 
     private String normalize(String address) {
@@ -76,9 +106,9 @@ public class WatchlistCacheService {
         return address.trim().toLowerCase(Locale.ROOT);
     }
 
-    private record WatchlistMeta(String label, String category) {
+    private record WatchlistMeta(String label, String category, String projectWebhookUrl) {
     }
 
-    public record WatchlistHit(String address, String label, String category) {
+    public record WatchlistHit(String address, String label, String category, Long projectId, String projectWebhookUrl) {
     }
 }

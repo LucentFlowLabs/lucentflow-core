@@ -10,6 +10,7 @@ import java.time.Instant;
  */
 public record WatchlistDTO(
         Long id,
+        Long projectId,
         String address,
         String label,
         String category,
