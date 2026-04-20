@@ -5,6 +5,8 @@ import org.springframework.stereotype.Service;
 import org.web3j.protocol.core.methods.response.Transaction;
 
 import java.math.BigInteger;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Core engine for evaluating the risk profile of whale transactions and contract deployments.
@@ -17,13 +19,7 @@ import java.math.BigInteger;
 @Service
 public class RiskEngine {
 
-    /**
-     * Immutable record representing the computed risk assessment.
-     * 
-     * @param score The computed risk score from 0 to 100
-     * @param reasons The aggregated reasons for the applied risk score
-     */
-    public record RiskAssessment(int score, String reasons) {}
+    public record RiskAssessment(int rawScore, Map<String, Integer> reasons) {}
 
     /**
      * Calculates an institutional-grade risk score (0-100) based on multiple heuristic factors.
@@ -33,12 +29,12 @@ public class RiskEngine {
      * @param tx The raw Web3j transaction containing execution parameters (gas, input data)
      * @param recentDeploymentCount contract creations from the same {@code from} in the lookback window (e.g. 10 minutes)
      * @param identicalBytecodeCount prior rows in DB with the same creation bytecode hash in the lookback window (e.g. 7 days)
-     * @return A {@link RiskAssessment} containing the final bounded score and descriptive reasons
+     * @return A {@link RiskAssessment} containing raw score and structured reason weights
      */
     public RiskAssessment calculateRisk(WhaleTransaction whaleTx, Transaction tx, int recentDeploymentCount,
                                         int identicalBytecodeCount) {
         int score = 0;
-        StringBuilder reasons = new StringBuilder();
+        Map<String, Integer> reasons = new LinkedHashMap<>();
 
         // 1. Funding Source Analysis (CEX vs. Anonymous Mixers)
         String riskLevel = whaleTx.getRugRiskLevel() != null ? whaleTx.getRugRiskLevel() : "LOW";
@@ -49,10 +45,7 @@ public class RiskEngine {
             case "LOW" -> 0;
             default -> 10;
         };
-        score += fundingScore;
-        if (fundingScore > 0) {
-            reasons.append("Funding Source Risk (").append(riskLevel).append("); ");
-        }
+        score += addReason(reasons, "FUNDING_" + riskLevel, fundingScore);
 
         // 2. Gas Priority Fee Anomalies (Potential exit liquidity indicators)
         BigInteger priorityFee = tx != null ? tx.getMaxPriorityFeePerGas() : null;
@@ -61,59 +54,50 @@ public class RiskEngine {
             // EIP-1559 Transactions
             // A priority fee > 10 Gwei (10,000,000,000 wei) is highly anomalous for L2 networks like Base
             if (priorityFee.compareTo(BigInteger.valueOf(10_000_000_000L)) > 0) {
-                score += 30;
-                reasons.append("High Priority Fee (Exit Sign); ");
+                score += addReason(reasons, "HIGH_PRIORITY_FEE", 30);
             } else if (priorityFee.compareTo(BigInteger.valueOf(2_000_000_000L)) > 0) {
-                score += 15;
-                reasons.append("Elevated Priority Fee; ");
+                score += addReason(reasons, "ELEVATED_PRIORITY_FEE", 15);
             }
         } else if (gasPrice != null && gasPrice.compareTo(BigInteger.valueOf(50_000_000_000L)) > 0) {
             // Legacy Transaction Fallback
-            score += 20;
-            reasons.append("High Gas Price Anomaly; ");
+            score += addReason(reasons, "HIGH_GAS_PRICE_ANOMALY", 20);
         }
 
         // 3. Contract Age and Address Freshness Factor
         if (Boolean.TRUE.equals(whaleTx.getIsContractCreation())) {
-            score += 30;
-            reasons.append("Fresh Contract Creation; ");
+            score += addReason(reasons, "CONTRACT_CREATION", 30);
         } else {
             BigInteger nonce = tx != null ? tx.getNonce() : null;
             if (nonce != null && nonce.compareTo(BigInteger.valueOf(10)) < 0) {
-                score += 20;
-                reasons.append("Low Nonce (Freshness Factor); ");
+                score += addReason(reasons, "LOW_NONCE", 20);
             }
         }
 
         // 4. Dangerous Method Signature Detection (e.g., renounceOwnership)
         String input = tx != null ? tx.getInput() : null;
         if (input != null && (input.startsWith("0x715018a6") || input.contains("715018a6"))) {
-            score += 20;
-            reasons.append("Renounce Ownership Detected; ");
+            score += addReason(reasons, "RENOUNCE_OWNERSHIP", 20);
         }
 
         // 5. Serial deployer / contract factory pattern (multiple creations from same EOA in a short window)
         if (recentDeploymentCount > 2) {
-            score += 25;
-            reasons.append("Serial Deployment Pattern Detected (")
-                    .append(recentDeploymentCount)
-                    .append(" deployments in 10m); ");
+            score += addReason(reasons, "SERIAL_DEPLOYER", 25);
         }
 
         // 6. Identical creation bytecode (clone / scam factory reuse)
         if (identicalBytecodeCount > 0) {
-            score += 20;
-            reasons.append("Identical Bytecode Detected (Clone of ")
-                    .append(identicalBytecodeCount)
-                    .append(" previous deployments); ");
+            score += addReason(reasons, "CONTRACT_CLONE", 20);
         }
 
-        // Bound final score to maximum of 100
-        score = Math.min(score, 100);
-        
-        // Format final reasons string, trimming the trailing semicolon and space
-        String finalReasons = reasons.length() > 0 ? reasons.substring(0, reasons.length() - 2) : "Normal";
-        
-        return new RiskAssessment(score, finalReasons);
+        return new RiskAssessment(score, reasons);
+    }
+
+    private int addReason(Map<String, Integer> reasons, String key, int points) {
+        if (points <= 0) {
+            return 0;
+        }
+        Integer existing = reasons.get(key);
+        reasons.put(key, (existing == null ? 0 : existing) + points);
+        return points;
     }
 }

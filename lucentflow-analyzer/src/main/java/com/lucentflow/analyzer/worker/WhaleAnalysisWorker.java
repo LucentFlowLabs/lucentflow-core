@@ -27,7 +27,9 @@ import org.web3j.exceptions.MessageDecodingException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -500,13 +502,16 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private CompletableFuture<WhaleTransaction> applyGenesisTraceIfHighRisk(WhaleTransaction whaleTx, Transaction tx) {
         Integer score = whaleTx.getRiskScore();
         if (score == null || score <= 40) {
+            normalizeRiskProfile(whaleTx);
             return CompletableFuture.completedFuture(whaleTx);
         }
         if (shouldSkipDeepOriginTrace(score)) {
+            normalizeRiskProfile(whaleTx);
             return CompletableFuture.completedFuture(whaleTx);
         }
         String initiator = tx.getFrom();
         if (initiator == null || initiator.isBlank()) {
+            normalizeRiskProfile(whaleTx);
             return CompletableFuture.completedFuture(whaleTx);
         }
         return creatorFundingTracer.traceOriginAsync(initiator).thenApply(opt -> {
@@ -516,9 +521,10 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
                 if (o.blacklisted()) {
                     int base = whaleTx.getRiskScore() == null ? 0 : whaleTx.getRiskScore();
                     whaleTx.setRiskScore(base + 35);
-                    appendRiskReason(whaleTx, "Genesis Trace 2.0: Blacklisted funding source");
+                    appendRiskReason(whaleTx, "BLACKLISTED_FUNDING_SOURCE", 35);
                 }
             });
+            normalizeRiskProfile(whaleTx);
             return whaleTx;
         });
     }
@@ -558,16 +564,14 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         }
     }
 
-    private void appendRiskReason(WhaleTransaction whaleTx, String reason) {
-        if (whaleTx == null || reason == null || reason.isBlank()) {
+    private void appendRiskReason(WhaleTransaction whaleTx, String reasonKey, int points) {
+        if (whaleTx == null || reasonKey == null || reasonKey.isBlank() || points <= 0) {
             return;
         }
-        String existing = whaleTx.getRiskReasons();
-        if (existing == null || existing.isBlank()) {
-            whaleTx.setRiskReasons(reason);
-        } else if (!existing.contains(reason)) {
-            whaleTx.setRiskReasons(existing + " | " + reason);
-        }
+        Map<String, Integer> reasons = new LinkedHashMap<>(safeReasons(whaleTx.getRiskReasons()));
+        Integer existing = reasons.get(reasonKey);
+        reasons.put(reasonKey, (existing == null ? 0 : existing) + points);
+        whaleTx.setRiskReasons(reasons);
     }
 
     /**
@@ -580,8 +584,8 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         int recentDeploymentCount = countRecentDeploymentsForInitiator(tx.getFrom());
         int identicalBytecodeCount = countIdenticalBytecodeDeployments(whaleTx.getBytecodeHash());
         var riskAssessment = riskEngine.calculateRisk(whaleTx, tx, recentDeploymentCount, identicalBytecodeCount);
-        whaleTx.setRiskScore(riskAssessment.score());
-        whaleTx.setRiskReasons(riskAssessment.reasons());
+        whaleTx.setRiskScore(riskAssessment.rawScore());
+        whaleTx.setRiskReasons(new LinkedHashMap<>(riskAssessment.reasons()));
     }
 
     /**
@@ -657,14 +661,24 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         Integer baseScore = whaleTx.getRiskScore();
         int adjustedScore = (baseScore == null ? 0 : baseScore) + 40;
         whaleTx.setRiskScore(adjustedScore);
+        appendRiskReason(whaleTx, "REVERT_PROBE", 40);
+    }
 
-        String baseReasons = whaleTx.getRiskReasons();
-        String reason = "On-chain Reverted Transaction (Potential Exploit Attempt)";
-        if (baseReasons == null || baseReasons.isBlank()) {
-            whaleTx.setRiskReasons(reason);
-        } else if (!baseReasons.contains(reason)) {
-            whaleTx.setRiskReasons(baseReasons + " | " + reason);
+    private void normalizeRiskProfile(WhaleTransaction whaleTx) {
+        if (whaleTx == null) {
+            return;
         }
+        int rawScore = whaleTx.getRiskScore() == null ? 0 : whaleTx.getRiskScore();
+        int normalizedScore = Math.max(0, Math.min(100, rawScore));
+        whaleTx.setRiskScore(normalizedScore);
+        whaleTx.setRiskReasons(new LinkedHashMap<>(safeReasons(whaleTx.getRiskReasons())));
+    }
+
+    private Map<String, Integer> safeReasons(Map<String, Integer> reasons) {
+        if (reasons == null || reasons.isEmpty()) {
+            return Map.of("BASELINE_NORMAL", 0);
+        }
+        return reasons;
     }
 
     /**

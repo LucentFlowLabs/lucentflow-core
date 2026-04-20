@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.Objects;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -98,7 +99,7 @@ public class AlertService {
     private String formatMessage(WhaleTransaction tx) {
         int riskScore = tx.getRiskScore() != null ? tx.getRiskScore() : 0;
         String riskStatus = Objects.requireNonNullElse(tx.getRugRiskLevel(), mapScoreToStatus(riskScore));
-        String reasons = escapeHtml(tx.getRiskReasons() != null ? tx.getRiskReasons() : "—");
+        String reasonSummary = escapeHtml(formatReasons(tx.getRiskReasons()));
         String valueEth = tx.getValueEth() != null ? tx.getValueEth().stripTrailingZeros().toPlainString() : "0";
         String from = escapeHtml(tx.getFromAddress() != null ? tx.getFromAddress() : "—");
         String hash = tx.getHash() != null ? tx.getHash() : "";
@@ -112,7 +113,19 @@ public class AlertService {
                 <b>Value:</b> %s ETH
                 <b>Initiator:</b> <code>%s</code>
                 <b>Action:</b> <a href="%s">Verify on Basescan</a>
-                """.formatted(riskScore, escapeHtml(riskStatus), reasons, valueEth, from, txLink);
+                """.formatted(riskScore, escapeHtml(riskStatus), reasonSummary, valueEth, from, txLink);
+    }
+
+    private static String formatReasons(Map<String, Integer> reasons) {
+        if (reasons == null || reasons.isEmpty()) {
+            return "BASELINE_NORMAL";
+        }
+        return reasons.entrySet().stream()
+                .filter(e -> e.getValue() != null && e.getValue() > 0)
+                .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
+                .map(e -> e.getKey() + ":" + e.getValue())
+                .reduce((a, b) -> a + ", " + b)
+                .orElse("BASELINE_NORMAL");
     }
 
     private static String mapScoreToStatus(int score) {

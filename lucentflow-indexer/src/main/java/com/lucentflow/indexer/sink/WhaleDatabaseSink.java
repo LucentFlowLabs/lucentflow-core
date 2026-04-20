@@ -1,6 +1,8 @@
 package com.lucentflow.indexer.sink;
 
 import com.lucentflow.common.entity.WhaleTransaction;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lucentflow.indexer.repository.WhaleTransactionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +34,8 @@ import java.util.List;
 @Component
 @RequiredArgsConstructor
 public class WhaleDatabaseSink {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     
     private final WhaleTransactionRepository whaleTransactionRepository;
     private final JdbcTemplate jdbcTemplate;
@@ -63,7 +67,7 @@ public class WhaleDatabaseSink {
                 address_tag, transaction_category, funding_source_address, funding_source_tag,
                 rug_risk_level, risk_score, risk_reasons, execution_status, bytecode_hash,
                 token_symbol, token_address, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (hash) DO UPDATE SET
                 risk_score = EXCLUDED.risk_score,
                 risk_reasons = EXCLUDED.risk_reasons,
@@ -114,7 +118,11 @@ public class WhaleDatabaseSink {
                     } else {
                         ps.setNull(20, java.sql.Types.INTEGER);
                     }
-                    ps.setString(21, tx.getRiskReasons());
+                    if (tx.getRiskReasons() != null && !tx.getRiskReasons().isEmpty()) {
+                        ps.setObject(21, toRiskReasonsJson(tx), java.sql.Types.OTHER);
+                    } else {
+                        ps.setObject(21, "{}", java.sql.Types.OTHER);
+                    }
 
                     if (tx.getExecutionStatus() != null) {
                         ps.setString(22, tx.getExecutionStatus());
@@ -163,6 +171,15 @@ public class WhaleDatabaseSink {
         } catch (Exception e) {
             log.error("Failed to get database statistics", e);
             return "Database statistics unavailable";
+        }
+    }
+
+    private String toRiskReasonsJson(WhaleTransaction tx) {
+        try {
+            return OBJECT_MAPPER.writeValueAsString(tx.getRiskReasons());
+        } catch (JsonProcessingException e) {
+            log.warn("[SINK] Failed to serialize risk reasons for tx {}: {}", tx.getHash(), e.getMessage());
+            return "{}";
         }
     }
 }

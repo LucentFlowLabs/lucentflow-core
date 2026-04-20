@@ -1,6 +1,7 @@
 package com.lucentflow.common.entity;
 
 import jakarta.persistence.*;
+import com.lucentflow.common.entity.converter.RiskReasonsJsonConverter;
 import lombok.*;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
@@ -8,6 +9,8 @@ import org.springframework.data.annotation.LastModifiedDate;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * JPA Entity for storing whale transaction records.
@@ -114,8 +117,10 @@ public class WhaleTransaction {
         }
     }
 
-    @Column(name = "risk_reasons", length = 1000)
-    private String riskReasons;
+    @Convert(converter = RiskReasonsJsonConverter.class)
+    @Column(name = "risk_reasons", columnDefinition = "jsonb")
+    @Builder.Default
+    private Map<String, Integer> riskReasons = new LinkedHashMap<>();
 
     @Column(name = "execution_status", length = 20)
     private String executionStatus;
