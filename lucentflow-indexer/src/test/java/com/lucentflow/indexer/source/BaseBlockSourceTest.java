@@ -5,7 +5,7 @@ import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.control.AdaptiveBackpressureController;
 import com.lucentflow.indexer.config.IndexerRpcProfile;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
-import com.lucentflow.indexer.repository.SyncStatusRepository;
+import com.lucentflow.common.repository.SyncStatusRepository;
 import com.lucentflow.sdk.config.RpcProviderConfig;
 import com.lucentflow.sdk.config.RpcProviderType;
 import org.junit.jupiter.api.BeforeEach;

@@ -3,7 +3,7 @@ package com.lucentflow.analyzer.service;
 import com.lucentflow.common.entity.EntityTag;
 import com.lucentflow.common.entity.EntityTagCategory;
 import com.lucentflow.common.entity.WhaleTransaction;
-import com.lucentflow.indexer.repository.EntityTagRepository;
+import com.lucentflow.common.repository.EntityTagRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

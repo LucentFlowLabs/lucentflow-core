@@ -132,9 +132,9 @@ flowchart LR
 | API usage metering | ● | | + quota / rate-limit enforcement |
 | Forensic query / export | ● | | |
 | Public `/whales` | ● | | Free tier; IP soft rate-limited |
-| Event-driven `AnalysisOrchestrator` | | Dead path | No `WhaleDetectedEvent` publisher |
-| Split deploy / K8s | | | Monolith only |
-| Analyzer & B2B tests | | | Near-zero coverage |
+| Event-driven `AnalysisOrchestrator` | | | Removed (dead path) |
+| Split deploy / K8s | | | Monolith only (Phase 4) |
+| Analyzer & B2B tests | ● | | Unit coverage for auth/quota/cache |
 
 ---
 
@@ -159,11 +159,11 @@ flowchart LR
 5. **~~Public whale APIs vs B2B narrative~~** ✅ Decided (2026-07-13)  
    Remain unauthenticated **platform free tier**; soft IP rate limit via `PublicApiRateLimitInterceptor`. Paid surfaces stay project-keyed.
 
-6. **Dual analysis architecture**  
-   Live path: `WhaleAnalysisWorker`. Unused path: `WhaleDetectedEvent` + `AnalysisOrchestrator` + handlers (no publisher found). Consolidate or delete to reduce cognitive load.
+6. **~~Dual analysis architecture~~** ✅ Removed unused path (2026-07-13)  
+   Deleted `WhaleDetectedEvent`, `AnalysisOrchestrator`, and placeholder handlers. Live path remains `WhaleAnalysisWorker`.
 
-7. **Module dependency direction**  
-   `analyzer → indexer` and API use of indexer repositories couple layers. Prefer sinking persistence into `common` (or a dedicated persistence module).
+7. **~~Module dependency direction (repositories)~~** ✅ Fixed (2026-07-13)  
+   `WhaleTransactionRepository`, `SyncStatusRepository`, `EntityTagRepository` moved to `com.lucentflow.common.repository`. Analyzer still depends on indexer for `BaseBlockSource` / sink / funding tracer (Phase 4 candidate).
 
 8. **~~Usage metering without enforcement~~** ✅ Fixed (2026-07-13)  
    `ProjectApiQuotaService` enforces daily quota + per-minute rate limit (HTTP 429).
@@ -171,8 +171,8 @@ flowchart LR
 9. **~~API key storage~~** ✅ Fixed (2026-07-13)  
    V18 persists `api_key_hash` + `api_key_prefix`; plaintext only on create/rotate.
 
-10. **Config dualism**  
-    Indexer module `application.yml` still uses `ddl-auto: update`; monolithic runtime uses API Flyway-only (`ddl-auto: none`). Easy foot-gun for newcomers.
+10. **~~Config dualism~~** ✅ Fixed (2026-07-13)  
+    Indexer `application.yml` now uses `ddl-auto: none` and `flyway.enabled: false`; schema owned by `lucentflow-api` Flyway.
 
 ### 5.3 Lower priority / tech debt
 
@@ -180,7 +180,8 @@ flowchart LR
 12. `AlertRuleCacheService` full-table refresh on every upsert (OK for MVP scale).  
 13. No project DELETE API (soft-disable only).  
 14. Single shared `LUCENTFLOW_ADMIN_API_KEY` — no RBAC / audit trail.  
-15. `WhaleAnalysisWorker` `CommandLineRunner` + `Thread.join()` blocks boot thread (works, fragile for graceful shutdown).  
+15. **~~`WhaleAnalysisWorker` CommandLineRunner + join~~** ✅ Fixed (2026-07-13)  
+    Now implements `SmartLifecycle` with `isShuttingDown` loop guard and `awaitTermination` on stop.  
 16. Health aggregate may return HTTP 200 while component DOWN (probe-friendly; LB must parse JSON).
 
 ---
@@ -243,10 +244,11 @@ Interactive docs: Swagger UI at `/swagger-ui/index.html`.
 | P0 | Fix webhook global-URL early return | ✅ Fixed 2026-07-13 |
 | P1 | Inactive project / empty watchlist / bootstrap key | ✅ Fixed 2026-07-13 |
 | P2 | Quota / rate-limit, key hashing, public-tier decision, tests | ✅ Fixed 2026-07-13 |
-| P3 | Remove or wire `WhaleDetectedEvent` path | Architecture clarity |
-| P3 | Sink repositories to common / persistence module | Dependency hygiene |
-| P3 | Unify indexer `ddl-auto` vs Flyway | Operator foot-gun |
-| P3 | Roadmap: Neo4j / Trace 3.0 / optional process split | Phase 4 vision |
+| P3 | Remove unused `WhaleDetectedEvent` path | ✅ Fixed 2026-07-13 |
+| P3 | Sink repositories to `lucentflow-common` | ✅ Fixed 2026-07-13 |
+| P3 | Unify indexer `ddl-auto` vs Flyway | ✅ Fixed 2026-07-13 |
+| P3 | `WhaleAnalysisWorker` SmartLifecycle shutdown | ✅ Fixed 2026-07-13 |
+| P4 | Roadmap: Neo4j / Trace 3.0 / optional process split | Phase 4 vision |
 
 ---
 
@@ -262,7 +264,7 @@ P0–P2 hardening landed on `feature/v1.2.0-analytics` (see git log). Remaining 
 
 **Scheme assessment:** Multi-tenant isolation via hashed Project Key + watchlist-scoped forensics + quota enforcement is a viable SaaS MVP. Remaining gaps are mainly **architectural debt** (event path, module coupling) and **Phase 4 graph forensics / HA**.
 
-**Overall progress:** Phase 1–2 complete; Phase 3 (B2B) complete through P2 hardening; Phase 4 not started.
+**Overall progress:** Phase 1–2 complete; Phase 3 (B2B + P0–P3 hardening) complete; Phase 4 (graph forensics / HA / process split) not started.
 
 ---
 

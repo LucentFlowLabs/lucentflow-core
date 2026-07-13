@@ -10,15 +10,14 @@ import com.lucentflow.analyzer.service.AddressLabeler;
 import com.lucentflow.analyzer.service.AlertService;
 import com.lucentflow.analyzer.service.TagInferenceEngine;
 import com.lucentflow.analyzer.service.TagOracleService;
-import com.lucentflow.indexer.repository.WhaleTransactionRepository;
+import com.lucentflow.common.repository.WhaleTransactionRepository;
 import com.lucentflow.indexer.source.BaseBlockSource;
 import com.lucentflow.indexer.sink.WhaleDatabaseSink;
 import com.lucentflow.indexer.service.CreatorFundingTracer;
-import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 import org.web3j.protocol.core.methods.response.Transaction;
 import org.web3j.protocol.core.methods.response.TransactionReceipt;
@@ -46,14 +45,15 @@ import java.util.concurrent.locks.LockSupport;
 /**
  * High-performance batch-processing whale analyzer.
  * Leverages Java 21 Virtual Threads and SQL Batching for maximum throughput.
- * 
+ * Lifecycle is managed via {@link SmartLifecycle} for graceful Spring Boot shutdown.
+ *
  * @author ArchLucent
  * @since 1.0
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class WhaleAnalysisWorker implements CommandLineRunner {
+public class WhaleAnalysisWorker implements SmartLifecycle {
     
     private final TransactionPipe transactionPipe;
     private final AddressLabeler addressLabeler;
@@ -70,6 +70,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private final AtomicLong whaleCount = new AtomicLong(0);
     private final AtomicLong errorCount = new AtomicLong(0);
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     private final AtomicLong catchUpCheckAtMs = new AtomicLong(0);
     private volatile boolean catchUpMode = false;
@@ -109,26 +110,74 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
     private final ConcurrentHashMap<String, long[]> bytecodeCountMemo = new ConcurrentHashMap<>();
 
     @Override
-    public void run(String... args) {
+    public void start() {
+        if (!running.compareAndSet(false, true)) {
+            return;
+        }
+        isShuttingDown.set(false);
         int effectiveConcurrency = Math.max(1, concurrency);
         int effectiveBatchSize = Math.max(1, batchSize);
-        log.info("Initializing WhaleAnalysisWorker with {} virtual thread workers (batchSize={}).",
+        log.info("Starting WhaleAnalysisWorker with {} virtual thread workers (batchSize={}).",
                 effectiveConcurrency, effectiveBatchSize);
-        
-        // T10 Standard: Use class-level ExecutorService for proper lifecycle management
+
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
-        
-        try {
-            for (int i = 0; i < effectiveConcurrency; i++) {
-                int workerId = i;
-                executor.submit(() -> startAnalysisLoop(workerId));
-            }
-            // Keep the main thread alive for the executor's lifetime
-            Thread.currentThread().join();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error("WhaleAnalysisWorker main thread interrupted.");
+        for (int i = 0; i < effectiveConcurrency; i++) {
+            int workerId = i;
+            executor.submit(() -> startAnalysisLoop(workerId));
         }
+    }
+
+    @Override
+    public void stop() {
+        doStop();
+    }
+
+    @Override
+    public void stop(Runnable callback) {
+        try {
+            doStop();
+        } finally {
+            callback.run();
+        }
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running.get();
+    }
+
+    @Override
+    public boolean isAutoStartup() {
+        return true;
+    }
+
+    @Override
+    public int getPhase() {
+        // Stop after web tier accepts no new traffic, before JVM exit.
+        return Integer.MAX_VALUE - 100;
+    }
+
+    private void doStop() {
+        if (!running.getAndSet(false) && isShuttingDown.get()) {
+            return;
+        }
+        log.info("Graceful shutdown: stopping WhaleAnalysisWorker...");
+        isShuttingDown.set(true);
+
+        if (executor != null) {
+            executor.shutdownNow();
+            try {
+                if (!executor.awaitTermination(25, TimeUnit.SECONDS)) {
+                    log.warn("WhaleAnalysisWorker executor did not terminate within 25s");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Interrupted while awaiting WhaleAnalysisWorker termination");
+            }
+        }
+
+        log.info("WhaleAnalysisWorker shutdown complete. Final stats: {} processed, {} whales detected, {} errors.",
+                processedCount.get(), whaleCount.get(), errorCount.get());
     }
 
     /**
@@ -141,7 +190,7 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
         log.info("Analyzer-Worker-{} (Virtual Thread) started.", workerId);
         
         try {
-            while (!Thread.currentThread().isInterrupted()) {
+            while (!isShuttingDown.get() && !Thread.currentThread().isInterrupted()) {
                 try {
                     log.debug("Worker-{} polling for next batch...", workerId);
                     List<Transaction> rawBatch = transactionPipe.drainBatch(Math.max(1, batchSize));
@@ -676,25 +725,5 @@ public class WhaleAnalysisWorker implements CommandLineRunner {
             return Map.of("BASELINE_NORMAL", 0);
         }
         return reasons;
-    }
-
-    /**
-     * Executes nuclear shutdown with ExecutorService force kill.
-     * T10 Standard lifecycle management.
-     */
-    @PreDestroy
-    public void stop() {
-        log.info("Nuclear shutdown: Force stopping WhaleAnalysisWorker...");
-        isShuttingDown.set(true);
-        Thread.currentThread().interrupt();
-        
-        // T10 Standard: Force kill all virtual thread tasks
-        if (executor != null) {
-            executor.shutdownNow(); // Force kill all tasks
-            log.info("ExecutorService shutdown completed.");
-        }
-        
-        log.info("WhaleAnalysisWorker nuclear shutdown complete. Final stats: {} processed, {} whales detected, {} errors.", 
-                processedCount.get(), whaleCount.get(), errorCount.get());
     }
 }

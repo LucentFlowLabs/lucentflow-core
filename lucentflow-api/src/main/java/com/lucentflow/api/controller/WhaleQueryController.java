@@ -1,8 +1,8 @@
 package com.lucentflow.api.controller;
 
 import com.lucentflow.common.entity.WhaleTransaction;
-import com.lucentflow.indexer.repository.WhaleTransactionRepository;
-import com.lucentflow.indexer.repository.SyncStatusRepository;
+import com.lucentflow.common.repository.WhaleTransactionRepository;
+import com.lucentflow.common.repository.SyncStatusRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;

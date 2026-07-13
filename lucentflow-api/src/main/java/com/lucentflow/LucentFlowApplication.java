@@ -17,7 +17,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * Key configurations:
  * - @SpringBootApplication: Enables Spring Boot auto-configuration
  * - @EnableScheduling: Enables scheduled orchestration tasks
- * - @EnableAsync: Enables async processing for whale analysis handlers
+ * - @EnableAsync: Enables async Spring tasks (RPC / alert helpers)
  * - Component scan: Explicitly scans com.lucentflow package for all modules
  * 
  * @author ArchLucent

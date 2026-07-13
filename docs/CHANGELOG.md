@@ -29,6 +29,7 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 - **API key at-rest hashing** — `V18` stores SHA-256 `api_key_hash` + display prefix; plaintext only on create/rotate.
 - **Quota / rate limits** — Project daily quota + per-minute limit; public whales/sync IP soft throttle (configurable; `0` disables).
 - **Public `/whales` decision** — Remain unauthenticated platform free tier; paid surfaces stay project-keyed.
+- **P3 tech debt** — Removed unused `WhaleDetectedEvent` path; moved JPA repositories to `lucentflow-common`; indexer `ddl-auto: none` + Flyway disabled; `WhaleAnalysisWorker` uses `SmartLifecycle` for graceful shutdown.
 - **API usage metering** — Counts only HTTP 2xx responses.
 - **`BasescanConfigTest`** — Fixed H2 test profile with mocked indexer/analyzer workers.
 

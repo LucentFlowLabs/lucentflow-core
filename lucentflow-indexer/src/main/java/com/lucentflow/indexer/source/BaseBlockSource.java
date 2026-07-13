@@ -7,7 +7,7 @@ import com.lucentflow.indexer.control.AdaptiveBackpressureController;
 import com.lucentflow.indexer.config.IndexerRpcProfile;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.common.exception.RateLimitException;
-import com.lucentflow.indexer.repository.SyncStatusRepository;
+import com.lucentflow.common.repository.SyncStatusRepository;
 import com.lucentflow.sdk.config.RpcProviderConfig;
 import com.lucentflow.sdk.config.RpcProviderType;
 import lombok.extern.slf4j.Slf4j;

@@ -1,4 +1,4 @@
-package com.lucentflow.indexer.repository;
+package com.lucentflow.common.repository;
 
 import com.lucentflow.common.entity.SyncStatus;
 import org.springframework.data.jpa.repository.JpaRepository;

@@ -17,7 +17,8 @@ spring:
   jpa:
     open-in-view: false
     hibernate:
-      ddl-auto: update
+      # Schema ownership lives in lucentflow-api Flyway migrations (ddl-auto: none).
+      ddl-auto: none
       show-sql: false
       properties:
         hibernate:
@@ -29,10 +30,9 @@ spring:
           batch_versioned_data: true
           generate_statistics: true
           
+  # Flyway scripts ship with lucentflow-api; disable here to avoid dual ownership.
   flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
+    enabled: false
     
   task:
     execution:

@@ -7,7 +7,7 @@ import com.lucentflow.api.spec.WhaleTransactionSpecifications;
 import com.lucentflow.common.entity.Watchlist;
 import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.common.repository.WatchlistRepository;
-import com.lucentflow.indexer.repository.WhaleTransactionRepository;
+import com.lucentflow.common.repository.WhaleTransactionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
