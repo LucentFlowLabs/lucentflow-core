@@ -1,0 +1,7 @@
+# Worker profile: indexer + analyzer without changing web surface (monolith jar still boots Actuator).
+# Prefer pairing with LUCENTFLOW_RUNTIME_* env overrides in K8s.
+# java -jar lucentflow.jar --spring.profiles.active=worker
+lucentflow:
+  runtime:
+    enable-indexer: true
+    enable-analyzer: true

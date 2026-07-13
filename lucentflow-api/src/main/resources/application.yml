@@ -59,6 +59,8 @@ lucentflow:
   telegram:
     bot-token: ${TELEGRAM_BOT_TOKEN:}
     chat-id: ${TELEGRAM_CHAT_ID:}
+  discord:
+    webhook-url: ${LUCENTFLOW_DISCORD_WEBHOOK_URL:}
   webhook:
     url: ${LUCENTFLOW_WEBHOOK_URL:}
     secret-token: ${LUCENTFLOW_WEBHOOK_SECRET_TOKEN:}
@@ -73,6 +75,19 @@ lucentflow:
     rate-limit-per-minute: ${LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE:120}
     # Soft throttle for unauthenticated public whales/sync endpoints (per client IP).
     public-rate-limit-per-minute: ${LUCENTFLOW_API_PUBLIC_RATE_LIMIT_PER_MINUTE:60}
+  runtime:
+    # Phase 4 process-split knobs (default: monolith runs both).
+    enable-indexer: ${LUCENTFLOW_RUNTIME_ENABLE_INDEXER:true}
+    enable-analyzer: ${LUCENTFLOW_RUNTIME_ENABLE_ANALYZER:true}
+  oracle:
+    enabled: ${LUCENTFLOW_ORACLE_ENABLED:true}
+    ttl-seconds: ${LUCENTFLOW_ORACLE_TTL_SECONDS:60}
+  neo4j:
+    # Optional Neo4j mirror (disabled by default). Topology queries use Postgres funding_edges.
+    enabled: ${LUCENTFLOW_NEO4J_ENABLED:false}
+    uri: ${LUCENTFLOW_NEO4J_URI:bolt://localhost:7687}
+    username: ${LUCENTFLOW_NEO4J_USERNAME:neo4j}
+    password: ${LUCENTFLOW_NEO4J_PASSWORD:lucentflow}
 
 logging:
   file:

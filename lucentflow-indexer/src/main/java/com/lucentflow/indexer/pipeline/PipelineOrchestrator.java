@@ -12,6 +12,7 @@ import com.lucentflow.sdk.config.RpcEndpointState;
 import com.lucentflow.sdk.config.RpcProviderType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -41,6 +42,7 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 @Slf4j
 @Service
+@ConditionalOnProperty(name = "lucentflow.runtime.enable-indexer", havingValue = "true", matchIfMissing = true)
 public class PipelineOrchestrator {
     
     private final BaseBlockSource blockSource;
@@ -571,6 +573,45 @@ public class PipelineOrchestrator {
         return stats.toString();
     }
     
+    /**
+     * On-demand historical backfill (Phase 4). Processes a closed block range into the pipe
+     * without advancing the ID=1 sync checkpoint (live head tracking stays intact).
+     *
+     * @param fromInclusive start block
+     * @param toInclusive   end block
+     * @return summary of accepted range and success flag
+     */
+    public BackfillReport backfillHistoricalRange(long fromInclusive, long toInclusive) {
+        if (fromInclusive < 0 || toInclusive < fromInclusive) {
+            throw new IllegalArgumentException("Invalid backfill range");
+        }
+        long span = toInclusive - fromInclusive + 1;
+        if (span > MAX_BACKFILL_BLOCKS) {
+            throw new IllegalArgumentException("Backfill span exceeds max of " + MAX_BACKFILL_BLOCKS + " blocks");
+        }
+        if (!scanLock.tryLock()) {
+            throw new IllegalStateException("Indexer is busy; retry backfill shortly");
+        }
+        try {
+            log.info("[BACKFILL] Historical range {}–{} ({} blocks), checkpoint untouched",
+                    fromInclusive, toInclusive, span);
+            boolean ok;
+            if (span > PARALLEL_PROCESSING_THRESHOLD) {
+                ok = processBlocksParallel(fromInclusive, toInclusive);
+            } else {
+                ok = processBlocksSequential(fromInclusive, toInclusive);
+            }
+            return new BackfillReport(fromInclusive, toInclusive, span, ok);
+        } finally {
+            scanLock.unlock();
+        }
+    }
+
+    public record BackfillReport(long fromBlock, long toBlock, long blockCount, boolean success) {
+    }
+
+    private static final long MAX_BACKFILL_BLOCKS = 2_000L;
+
     /**
      * Cleanup method to set shutdown flag when Spring context is destroyed.
      */

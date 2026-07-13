@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lucentflow-config
+data:
+  LUCENTFLOW_ORACLE_ENABLED: "true"
+  LUCENTFLOW_ORACLE_TTL_SECONDS: "60"
+  LUCENTFLOW_NEO4J_ENABLED: "false"
+  LUCENTFLOW_API_PUBLIC_RATE_LIMIT_PER_MINUTE: "60"

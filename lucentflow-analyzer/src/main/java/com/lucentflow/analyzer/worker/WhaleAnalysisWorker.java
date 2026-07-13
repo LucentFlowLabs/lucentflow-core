@@ -8,6 +8,7 @@ import com.lucentflow.common.utils.Sha256HexDigest;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.analyzer.service.AddressLabeler;
 import com.lucentflow.analyzer.service.AlertService;
+import com.lucentflow.analyzer.service.FundingTopologyService;
 import com.lucentflow.analyzer.service.TagInferenceEngine;
 import com.lucentflow.analyzer.service.TagOracleService;
 import com.lucentflow.common.repository.WhaleTransactionRepository;
@@ -17,6 +18,7 @@ import com.lucentflow.indexer.service.CreatorFundingTracer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 import org.web3j.protocol.core.methods.response.Transaction;
@@ -53,6 +55,7 @@ import java.util.concurrent.locks.LockSupport;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "lucentflow.runtime.enable-analyzer", havingValue = "true", matchIfMissing = true)
 public class WhaleAnalysisWorker implements SmartLifecycle {
     
     private final TransactionPipe transactionPipe;
@@ -65,6 +68,7 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
     private final AlertService alertService;
     private final TagOracleService tagOracleService;
     private final TagInferenceEngine tagInferenceEngine;
+    private final FundingTopologyService fundingTopologyService;
     
     private final AtomicLong processedCount = new AtomicLong(0);
     private final AtomicLong whaleCount = new AtomicLong(0);
@@ -564,6 +568,7 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
             opt.ifPresent(o -> {
                 whaleTx.setFundingSourceAddress(o.fundingSourceAddress());
                 whaleTx.setFundingSourceTag(o.fundingSourceTag());
+                fundingTopologyService.recordGenesisEdge(initiator, o, whaleTx.getHash());
                 if (o.blacklisted()) {
                     int base = whaleTx.getRiskScore() == null ? 0 : whaleTx.getRiskScore();
                     whaleTx.setRiskScore(base + 35);

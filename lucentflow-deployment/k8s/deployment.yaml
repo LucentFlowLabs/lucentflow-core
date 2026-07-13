@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lucentflow-api
+  labels:
+    app: lucentflow
+    component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lucentflow
+      component: api
+  template:
+    metadata:
+      labels:
+        app: lucentflow
+        component: api
+    spec:
+      containers:
+        - name: lucentflow-api
+          image: lucentflow/lucentflow-api:1.2.0-STABLE
+          imagePullPolicy: IfNotPresent
+          args: ["--spring.profiles.active=api"]
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: lucentflow-secrets
+            - configMapRef:
+                name: lucentflow-config
+          env:
+            - name: LUCENTFLOW_RUNTIME_ENABLE_INDEXER
+              value: "false"
+            - name: LUCENTFLOW_RUNTIME_ENABLE_ANALYZER
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lucentflow-worker
+  labels:
+    app: lucentflow
+    component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lucentflow
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: lucentflow
+        component: worker
+    spec:
+      containers:
+        - name: lucentflow-worker
+          image: lucentflow/lucentflow-api:1.2.0-STABLE
+          imagePullPolicy: IfNotPresent
+          args: ["--spring.profiles.active=worker"]
+          envFrom:
+            - secretRef:
+                name: lucentflow-secrets
+            - configMapRef:
+                name: lucentflow-config
+          env:
+            - name: LUCENTFLOW_RUNTIME_ENABLE_INDEXER
+              value: "true"
+            - name: LUCENTFLOW_RUNTIME_ENABLE_ANALYZER
+              value: "true"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi

@@ -39,6 +39,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .addPathPatterns(
                         "/api/v1/whales",
                         "/api/v1/whales/**",
-                        "/api/v1/sync-status");
+                        "/api/v1/sync-status",
+                        "/api/v1/oracle/**");
     }
 }

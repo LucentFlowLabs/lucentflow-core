@@ -43,10 +43,7 @@ Building upon the stable v1.0.0 core, Phase 2 (v1.1.0) elevates LucentFlow from 
 ## 📈 Roadmap Status
 - **Phase 1 (Core)**: ✅ Completed (TCV, Virtual Threads, Docker V2, Metabase Dashboards).
 - **Phase 2 (Forensics & Resilience)**: **[COMPLETED]** — v1.1.0-STABLE delivers adaptive RPC pacing, zero-config CLI / multi-path `.env`, transparent proxy mapping, virtual-thread throttling with semaphore governance, TCV hardening, and 429 soft-fail resilience. The **Asset Security OS** foundation is **stable** for sovereign deployments.
-- **Phase 3 (Genesis Trace 3.0 & Neo4j Topology)**: 🚀 **Next** — graph-native trace surfaces, cross-asset lineage, and ecosystem-scale forensics (timeline TBD).
-
-### Transition note (v1.1.0 → Phase 3)
-
-Industrial baseline work is **closed** for this release train. Engineering focus shifts to **Genesis Trace 3.0** and **Neo4j-backed topology**—deepening multi-hop provenance and institutional-grade audit trails without compromising data sovereignty.
+- **Phase 3 (Genesis Trace 3.0 & Neo4j Topology)**: **[FOUNDATION LANDED]** — Postgres `funding_edges` topology API, Discord channel, historical backfill, K8s api/worker split, optional Neo4j compose profile. Full Cypher sync / multi-asset oracle expansion remains iterative.
+- **Phase 4 (Scale & Graph Ops)**: 🚀 **In progress** — same train as above; HA Neo4j export and richer price feeds TBD.
 
 > *"Self-Custody means Self-Auditing. LucentFlow is the tool for that sovereignty."*

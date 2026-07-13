@@ -1,0 +1,6 @@
+# API-only profile: serve REST without live indexing/analysis loops.
+# java -jar lucentflow.jar --spring.profiles.active=api
+lucentflow:
+  runtime:
+    enable-indexer: false
+    enable-analyzer: false

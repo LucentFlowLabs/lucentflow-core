@@ -248,7 +248,12 @@ Interactive docs: Swagger UI at `/swagger-ui/index.html`.
 | P3 | Sink repositories to `lucentflow-common` | ✅ Fixed 2026-07-13 |
 | P3 | Unify indexer `ddl-auto` vs Flyway | ✅ Fixed 2026-07-13 |
 | P3 | `WhaleAnalysisWorker` SmartLifecycle shutdown | ✅ Fixed 2026-07-13 |
-| P4 | Roadmap: Neo4j / Trace 3.0 / optional process split | Phase 4 vision |
+| P4 | Discord alerts | ✅ Fixed 2026-07-13 |
+| P4 | Historical backfill admin API | ✅ Fixed 2026-07-13 |
+| P4 | Genesis Trace 3.0 topology (`funding_edges`) | ✅ Fixed 2026-07-13 |
+| P4 | Runtime split + K8s api/worker manifests | ✅ Fixed 2026-07-13 |
+| P4 | ETH/USD oracle + optional Neo4j compose | ✅ Fixed 2026-07-13 |
+| P4+ | Neo4j Cypher sync / richer multi-asset feeds | Iterative |
 
 ---
 
@@ -264,7 +269,7 @@ P0–P2 hardening landed on `feature/v1.2.0-analytics` (see git log). Remaining 
 
 **Scheme assessment:** Multi-tenant isolation via hashed Project Key + watchlist-scoped forensics + quota enforcement is a viable SaaS MVP. Remaining gaps are mainly **architectural debt** (event path, module coupling) and **Phase 4 graph forensics / HA**.
 
-**Overall progress:** Phase 1–2 complete; Phase 3 (B2B + P0–P3 hardening) complete; Phase 4 (graph forensics / HA / process split) not started.
+**Overall progress:** Phase 1–3 complete; Phase 4 foundation landed (Discord, backfill, topology, K8s split, oracle); Neo4j Cypher sync and broader price feeds remain iterative.
 
 ---
 

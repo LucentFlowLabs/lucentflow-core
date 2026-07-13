@@ -534,6 +534,9 @@ All endpoints below require the **`X-Project-Key`** header unless noted.
 | `/api/v1/watchlist` | CRUD | Project | Project-scoped watchlist |
 | `/api/v1/alert-rules` | GET/PUT | Project | Alert thresholds and routing rules |
 | `/api/v1/usage?days=30` | GET | Project | Daily API request counters |
+| `/api/v1/forensics/topology/{address}` | GET | Project | Genesis Trace 3.0 funding edges |
+| `/api/v1/oracle/eth-usd` | GET | Public | Cached ETH/USD price |
+| `/api/v1/admin/backfill` | POST | Admin | Historical block-range backfill |
 
 ### Admin APIs
 

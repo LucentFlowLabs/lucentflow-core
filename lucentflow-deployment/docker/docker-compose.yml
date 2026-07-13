@@ -109,10 +109,29 @@ services:
       retries: 3
       start_period: 90s
 
+  # Optional Genesis Trace 3.0 graph lab (enable with: docker compose --profile neo4j up -d)
+  neo4j:
+    profiles: ["neo4j"]
+    image: neo4j:5-community
+    container_name: lucentflow-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/${LUCENTFLOW_NEO4J_PASSWORD:-lucentflow}
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - lucentflow-network
+
 volumes:
   postgres_data:
     driver: local
   pgadmin_data:
+    driver: local
+  neo4j_data:
     driver: local
 
 networks:
