@@ -16,11 +16,11 @@ import java.util.Optional;
 @Repository
 public interface ProjectRepository extends JpaRepository<Project, Long> {
 
-    Optional<Project> findByApiKeyAndIsActiveTrue(String apiKey);
+    Optional<Project> findByApiKeyHashAndIsActiveTrue(String apiKeyHash);
 
     List<Project> findAllByOrderByCreatedAtDesc();
 
     boolean existsByNameIgnoreCase(String name);
 
-    boolean existsByApiKey(String apiKey);
+    boolean existsByApiKeyHash(String apiKeyHash);
 }

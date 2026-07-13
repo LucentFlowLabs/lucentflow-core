@@ -101,8 +101,10 @@ flowchart LR
 | Daily API usage metering | ✅ Done | V15 + interceptor 2xx-only counter |
 | sync_status singleton | ✅ Done | V16 + poller deletion |
 | Docs / CHANGELOG / demo_setup | ✅ Mostly synced | README claims v1.2.0-STABLE |
-| Quota / rate-limit enforcement | ❌ Missing | Metering only |
-| B2B integration tests | ❌ Missing | — |
+| Quota / rate-limit enforcement | ✅ Done | Daily + per-minute; `0` disables |
+| B2B unit tests (interceptors/quota/keys) | ✅ Done | Analyzer + API focused tests |
+| API key at-rest hashing | ✅ Done | V18 SHA-256 |
+| Public `/whales` product decision | ✅ Done | Free tier + IP soft limit |
 
 ### Phase 4 — Roadmap (from `docs/ROADMAP_v1.1.0.md`) 🚀 Next
 
@@ -123,13 +125,13 @@ flowchart LR
 | RiskEngine + funding / rug signals | ● | | |
 | ERC-20 + bytecode clone signals | ● | | |
 | Entity tags | ● | | |
-| Projects + API keys | ● | | Seed key hygiene |
+| Projects + API keys | ● | | Hashed at rest (V18) |
 | Watchlist isolation | ● | | |
 | Alert rules + cache | ● | | |
 | Webhook HMAC fan-out | ● | | |
-| API usage metering | ● | | No quota enforcement |
+| API usage metering | ● | | + quota / rate-limit enforcement |
 | Forensic query / export | ● | | |
-| Public `/whales` | ● | | Unauthenticated full dataset |
+| Public `/whales` | ● | | Free tier; IP soft rate-limited |
 | Event-driven `AnalysisOrchestrator` | | Dead path | No `WhaleDetectedEvent` publisher |
 | Split deploy / K8s | | | Monolith only |
 | Analyzer & B2B tests | | | Near-zero coverage |
@@ -154,8 +156,8 @@ flowchart LR
 4. **~~Inactive projects still receive pipeline alerts~~** ✅ Fixed (2026-07-13)  
    `AlertRuleCacheService` / `WatchlistCacheService` refresh skip `is_active=false` projects (`ActiveProjectCacheFilterTest`).
 
-5. **Public whale APIs vs B2B narrative**  
-   `/api/v1/whales`, `/whales/stats`, `/sync-status` remain unauthenticated. Fine as a platform data plane; conflict if forensic access is the paid surface—product decision needed.
+5. **~~Public whale APIs vs B2B narrative~~** ✅ Decided (2026-07-13)  
+   Remain unauthenticated **platform free tier**; soft IP rate limit via `PublicApiRateLimitInterceptor`. Paid surfaces stay project-keyed.
 
 6. **Dual analysis architecture**  
    Live path: `WhaleAnalysisWorker`. Unused path: `WhaleDetectedEvent` + `AnalysisOrchestrator` + handlers (no publisher found). Consolidate or delete to reduce cognitive load.
@@ -163,11 +165,11 @@ flowchart LR
 7. **Module dependency direction**  
    `analyzer → indexer` and API use of indexer repositories couple layers. Prefer sinking persistence into `common` (or a dedicated persistence module).
 
-8. **Usage metering without enforcement**  
-   Counters support billing visibility only; no rate limit / quota reject on interceptors.
+8. **~~Usage metering without enforcement~~** ✅ Fixed (2026-07-13)  
+   `ProjectApiQuotaService` enforces daily quota + per-minute rate limit (HTTP 429).
 
-9. **API key storage**  
-   Keys stored plaintext in `projects.api_key`. Prefer hash-at-rest with one-time plaintext on create/rotate.
+9. **~~API key storage~~** ✅ Fixed (2026-07-13)  
+   V18 persists `api_key_hash` + `api_key_prefix`; plaintext only on create/rotate.
 
 10. **Config dualism**  
     Indexer module `application.yml` still uses `ddl-auto: update`; monolithic runtime uses API Flyway-only (`ddl-auto: none`). Easy foot-gun for newcomers.
@@ -183,7 +185,7 @@ flowchart LR
 
 ---
 
-## 6. Database Migrations (V1–V17)
+## 6. Database Migrations (V1–V18)
 
 | Ver | Purpose |
 |-----|---------|
@@ -203,6 +205,7 @@ flowchart LR
 | V15 | **`project_api_usage`** daily counters |
 | V16 | **`sync_status` singleton** `CHECK (id = 1)` |
 | V17 | **Revoke** well-known V13 `default-dev-key` (deactivate + rotate) |
+| V18 | **Hash** project API keys (`api_key_hash` + `api_key_prefix`) |
 
 ---
 
@@ -225,11 +228,11 @@ Interactive docs: Swagger UI at `/swagger-ui/index.html`.
 |--------|--------------|-------|
 | common | 4 | Pipe, crypto, modular utils |
 | indexer | 4 | RPC policy, governor, source, transformer |
-| api | 1 | Smoke (`BasescanConfigTest` with workers mocked) |
-| analyzer | **0** | No dedicated tests |
-| **Total** | **9** | Heavy skew; B2B paths untested |
+| api | 6+ | Smoke + key/hash, quota, interceptors, specs |
+| analyzer | 2 | Webhook gate + active-project cache filter |
+| **Total** | **16+** | B2B auth/quota paths covered at unit level |
 
-**Priority test backlog:** ApiKey/AdminKey interceptors, AlertRule upsert + cache refresh, Forensic scope (empty vs non-empty watchlist), ProjectApiUsage UPSERT, Webhook URL resolution.
+**Still thin:** full `@SpringBootTest`+MockMvc forensics/admin flows; AlertRule upsert end-to-end.
 
 ---
 
@@ -237,41 +240,29 @@ Interactive docs: Swagger UI at `/swagger-ui/index.html`.
 
 | Priority | Action | Why |
 |----------|--------|-----|
-| P0 | Fix webhook global-URL early return | ✅ Fixed 2026-07-13 — gate now accepts project URL or global URL |
-| P1 | Filter inactive projects in alert/watchlist caches | ✅ Fixed 2026-07-13 |
-| P1 | Forensic empty-watchlist → empty results | ✅ Fixed 2026-07-13 |
-| P1 | Revoke bootstrap `default-dev-key` (V17) | ✅ Fixed 2026-07-13 |
-| P2 | Add quota/rate-limit on top of usage metering | Monetization readiness |
-| P2 | Integration tests for B2B controllers | Regression safety |
-| P2 | Hash API keys at rest | Breach blast-radius |
-| P2 | Decide auth for public `/whales` | Product / pricing boundary |
+| P0 | Fix webhook global-URL early return | ✅ Fixed 2026-07-13 |
+| P1 | Inactive project / empty watchlist / bootstrap key | ✅ Fixed 2026-07-13 |
+| P2 | Quota / rate-limit, key hashing, public-tier decision, tests | ✅ Fixed 2026-07-13 |
 | P3 | Remove or wire `WhaleDetectedEvent` path | Architecture clarity |
 | P3 | Sink repositories to common / persistence module | Dependency hygiene |
+| P3 | Unify indexer `ddl-auto` vs Flyway | Operator foot-gun |
 | P3 | Roadmap: Neo4j / Trace 3.0 / optional process split | Phase 4 vision |
 
 ---
 
-## 10. Working Tree Snapshot (as of review)
+## 10. Working Tree Snapshot
 
-Uncommitted / in-flight relative to last commit (representative):
-
-**New:** AlertRule / ProjectAdmin / ProjectUsage controllers & services, `AlertRuleCacheService`, `AdminKeyInterceptor`, entities/repos, Flyway V14–V16, DTOs, key generator.
-
-**Changed:** `AlertService`, `ApiKeyInterceptor`, `WebMvcConfig`, `SwaggerConfig`, `ForensicQueryService`, `WhaleQueryController`, `SyncStatus` / indexer repos, `TransactionPipe` (+ test), docs (README, API, CHANGELOG, LOCAL-DEVELOPMENT), root `pom.xml`.
-
-**Removed:** `BaseBlockPoller`, `lucentflow-parent/pom.xml` (merged).
-
-Interpretation: **v1.2 B2B feature set is implemented in the working tree and documented as STABLE**; remaining work is hardening, tests, and the P0 webhook gate—not greenfield scaffolding.
+P0–P2 hardening landed on `feature/v1.2.0-analytics` (see git log). Remaining focus: P3 tech debt and Phase 4 roadmap.
 
 ---
 
 ## 11. Conclusion
 
-**Framework assessment:** Module boundaries are clear enough for a security sentinel monolith; protocols (ID=1, UPSERT, VT, adaptive RPC) are coherent and production-minded. The v1.2 B2B layer correctly reuses the same process for low-latency alert fan-out, at the cost of coupling and limited horizontal scale.
+**Framework assessment:** Module boundaries are clear enough for a security sentinel monolith; protocols (ID=1, UPSERT, VT, adaptive RPC) are coherent and production-minded.
 
-**Scheme assessment:** Multi-tenant isolation via Project Key + watchlist-scoped forensics is a sound MVP model. Gaps are concentrated in **delivery correctness (webhook gate)**, **tenant data boundaries (empty watchlist / public whales)**, and **enterprise controls (quota, key hashing, tests)**—not in core indexing or risk scoring.
+**Scheme assessment:** Multi-tenant isolation via hashed Project Key + watchlist-scoped forensics + quota enforcement is a viable SaaS MVP. Remaining gaps are mainly **architectural debt** (event path, module coupling) and **Phase 4 graph forensics / HA**.
 
-**Overall progress:** Phase 1–2 complete; Phase 3 functionally complete as MVP with known hardening backlog; Phase 4 (graph forensics / HA) not started.
+**Overall progress:** Phase 1–2 complete; Phase 3 (B2B) complete through P2 hardening; Phase 4 not started.
 
 ---
 

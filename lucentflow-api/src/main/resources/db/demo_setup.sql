@@ -1,20 +1,24 @@
 -- LucentFlow Demo Bootstrap (v1.2.0)
 -- LOCAL / DEMO ONLY — do NOT run against production databases.
--- The Flyway V13 bootstrap key (default-dev-key) is revoked by V17; use this script
--- or Admin API (X-Admin-Key) to provision a local project instead.
+-- The Flyway V13 bootstrap key (default-dev-key) is revoked by V17; API keys are hashed at rest (V18).
+-- Clients still send plaintext X-Project-Key: demo-project-key-2026
 -- Usage:
 --   psql -h <host> -U <user> -d <db> -f src/main/resources/db/demo_setup.sql
 
--- 1) Demo project with API key and webhook endpoint
-INSERT INTO projects (name, api_key, webhook_url, is_active)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- 1) Demo project with hashed API key and webhook endpoint
+INSERT INTO projects (name, api_key_hash, api_key_prefix, webhook_url, is_active)
 VALUES (
     'Demo Project',
-    'demo-project-key-2026',
+    encode(digest('demo-project-key-2026', 'sha256'), 'hex'),
+    left('demo-project-key-2026', 8),
     'https://webhook.site/replace-with-your-endpoint',
     TRUE
 )
-ON CONFLICT (api_key) DO UPDATE
+ON CONFLICT (api_key_hash) DO UPDATE
 SET name = EXCLUDED.name,
+    api_key_prefix = EXCLUDED.api_key_prefix,
     webhook_url = EXCLUDED.webhook_url,
     is_active = EXCLUDED.is_active;
 
@@ -22,14 +26,14 @@ SET name = EXCLUDED.name,
 INSERT INTO alert_rules (project_id, min_risk_score, watchlist_only, contract_creation_only, enabled)
 SELECT p.id, 70, FALSE, FALSE, TRUE
 FROM projects p
-WHERE p.api_key = 'demo-project-key-2026'
+WHERE p.api_key_hash = encode(digest('demo-project-key-2026', 'sha256'), 'hex')
 ON CONFLICT (project_id) DO NOTHING;
 
 -- 3) Sample API usage for demo dashboards (Run-2)
 INSERT INTO project_api_usage (project_id, usage_date, request_count)
 SELECT p.id, CURRENT_DATE, 42
 FROM projects p
-WHERE p.api_key = 'demo-project-key-2026'
+WHERE p.api_key_hash = encode(digest('demo-project-key-2026', 'sha256'), 'hex')
 ON CONFLICT (project_id, usage_date)
 DO UPDATE SET request_count = EXCLUDED.request_count,
               updated_at = CURRENT_TIMESTAMP;
@@ -38,7 +42,7 @@ DO UPDATE SET request_count = EXCLUDED.request_count,
 WITH demo_project AS (
     SELECT id
     FROM projects
-    WHERE api_key = 'demo-project-key-2026'
+    WHERE api_key_hash = encode(digest('demo-project-key-2026', 'sha256'), 'hex')
     LIMIT 1
 )
 INSERT INTO watchlist (address, label, category, project_id, created_at)

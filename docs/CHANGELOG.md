@@ -26,6 +26,9 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 - **Forensics empty watchlist** — Empty project watchlist returns **empty** forensic results (tenant isolation; was full-dataset onboarding in earlier 1.2 drafts).
 - **Inactive projects** — Alert/watchlist pipeline caches skip `is_active=false` projects.
 - **Bootstrap key revoke** — `V17` deactivates and rotates the well-known V13 `default-dev-key`.
+- **API key at-rest hashing** — `V18` stores SHA-256 `api_key_hash` + display prefix; plaintext only on create/rotate.
+- **Quota / rate limits** — Project daily quota + per-minute limit; public whales/sync IP soft throttle (configurable; `0` disables).
+- **Public `/whales` decision** — Remain unauthenticated platform free tier; paid surfaces stay project-keyed.
 - **API usage metering** — Counts only HTTP 2xx responses.
 - **`BasescanConfigTest`** — Fixed H2 test profile with mocked indexer/analyzer workers.
 
@@ -36,6 +39,7 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 - `V15` project_api_usage
 - `V16` sync_status singleton enforcement
 - `V17` revoke bootstrap `default-dev-key`
+- `V18` hash project API keys at rest
 
 ---
 

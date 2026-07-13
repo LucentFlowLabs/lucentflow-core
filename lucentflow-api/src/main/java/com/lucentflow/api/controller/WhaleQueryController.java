@@ -29,15 +29,18 @@ import java.util.Optional;
 
 /**
  * REST API controller for querying whale transactions and sync status.
- * Provides endpoints for whale transaction analysis and blockchain synchronization monitoring.
- * 
+ * <p>
+ * Product decision (v1.2 P2): these endpoints remain a public platform free tier
+ * (no {@code X-Project-Key}). Abuse is mitigated by {@code PublicApiRateLimitInterceptor}.
+ * Paid / tenant-scoped surfaces live under forensics, watchlist, alert-rules, and usage.
+ *
  * @author ArchLucent
  * @since 1.0
  */
 @Slf4j
 @RestController
 @RequestMapping("/api/v1")
-@Tag(name = "Whale Query API", description = "Public API for whale transactions and sync status (no API key required).")
+@Tag(name = "Whale Query API", description = "Public platform free tier for whale transactions and sync status (no API key; IP soft rate-limited).")
 @SecurityRequirements
 public class WhaleQueryController {
     

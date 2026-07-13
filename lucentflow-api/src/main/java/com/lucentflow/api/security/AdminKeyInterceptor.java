@@ -6,6 +6,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+
 /**
  * Admin authentication using X-Admin-Key for project management APIs.
  *
@@ -31,10 +34,16 @@ public class AdminKeyInterceptor implements HandlerInterceptor {
             return false;
         }
         String providedKey = request.getHeader(ADMIN_KEY_HEADER);
-        if (providedKey == null || providedKey.isBlank() || !adminApiKey.equals(providedKey.trim())) {
+        if (providedKey == null || providedKey.isBlank() || !constantTimeEquals(adminApiKey, providedKey.trim())) {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid admin key");
             return false;
         }
         return true;
+    }
+
+    private static boolean constantTimeEquals(String expected, String provided) {
+        byte[] a = expected.getBytes(StandardCharsets.UTF_8);
+        byte[] b = provided.getBytes(StandardCharsets.UTF_8);
+        return MessageDigest.isEqual(a, b);
     }
 }

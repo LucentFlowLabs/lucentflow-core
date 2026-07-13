@@ -510,6 +510,16 @@ curl http://localhost:8080/api/v1/whales?minEth=100&page=0&size=5
 
 Project-scoped forensic queries are **restricted to the project's watchlist addresses**. When a project has **no watchlist entries**, queries and exports return an **empty result set** (tenant isolation). Add watchlist addresses before expecting forensic data.
 
+### Auth model & quotas
+
+| Surface | Auth | Limits |
+|---------|------|--------|
+| `/api/v1/whales`, `/whales/stats`, `/sync-status` | **None** (platform free tier) | IP soft rate limit (`LUCENTFLOW_API_PUBLIC_RATE_LIMIT_PER_MINUTE`, default 60; `0` disables) |
+| `/forensics/**`, `/watchlist/**`, `/alert-rules/**`, `/usage/**` | `X-Project-Key` | Per-project minute rate + daily quota (`LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`, `LUCENTFLOW_API_DAILY_REQUEST_QUOTA`) |
+| `/admin/projects/**` | `X-Admin-Key` | Admin key required |
+
+Project API keys are stored as **SHA-256 hashes** (`api_key_hash`); plaintext is returned only on create/rotate. Exceeding project quotas returns **HTTP 429**.
+
 ---
 
 ## B2B Project-Scoped APIs (v1.2.0)

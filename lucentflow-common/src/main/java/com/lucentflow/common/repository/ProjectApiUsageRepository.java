@@ -31,6 +31,17 @@ public interface ProjectApiUsageRepository extends JpaRepository<ProjectApiUsage
             """)
     long sumRequestCountByProjectId(@Param("projectId") Long projectId);
 
+    @Query("""
+            SELECT COALESCE(SUM(u.requestCount), 0)
+            FROM ProjectApiUsage u
+            WHERE u.project.id = :projectId
+              AND u.usageDate = :usageDate
+            """)
+    long sumRequestCountByProjectIdAndUsageDate(
+            @Param("projectId") Long projectId,
+            @Param("usageDate") LocalDate usageDate
+    );
+
     @Modifying
     @Query(value = """
             INSERT INTO project_api_usage (project_id, usage_date, request_count, updated_at)

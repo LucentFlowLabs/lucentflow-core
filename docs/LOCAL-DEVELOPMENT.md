@@ -21,7 +21,9 @@ psql -h localhost -U admin -d lucentflow -f lucentflow-api/src/main/resources/db
 | `X-Project-Key: demo-project-key-2026` | Project-scoped forensics / watchlist / alert-rules / usage |
 | `LUCENTFLOW_ADMIN_API_KEY` | Admin project CRUD at `/api/v1/admin/projects` |
 
-**Production:** Flyway **V17** revokes the V13 `default-dev-key` bootstrap credential (project deactivated + key rotated). Never load `demo_setup.sql` on production; create tenants via Admin API and rotate keys before public exposure.
+**Production:** Flyway **V17** revokes the V13 `default-dev-key` bootstrap credential; **V18** stores project keys as SHA-256 hashes (clients still send plaintext `X-Project-Key`). Never load `demo_setup.sql` on production; create tenants via Admin API. Quota defaults: `LUCENTFLOW_API_DAILY_REQUEST_QUOTA`, `LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`, `LUCENTFLOW_API_PUBLIC_RATE_LIMIT_PER_MINUTE` (set `0` to disable).
+
+Public `/api/v1/whales` and `/sync-status` stay **unauthenticated** (platform free tier) and are IP soft rate-limited.
 
 Swagger UI: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html) — public endpoints (`/whales`, `/sync-status`) need no key; project and admin endpoints use separate security schemes.
 

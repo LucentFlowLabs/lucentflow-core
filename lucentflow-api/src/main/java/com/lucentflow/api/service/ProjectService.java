@@ -39,13 +39,13 @@ public class ProjectService {
     @Transactional(readOnly = true)
     public List<ProjectDTO> listAll() {
         return projectRepository.findAllByOrderByCreatedAtDesc().stream()
-                .map(project -> toDto(project, true))
+                .map(project -> toDto(project, null))
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public Optional<ProjectDTO> getById(Long id) {
-        return projectRepository.findById(id).map(project -> toDto(project, true));
+        return projectRepository.findById(id).map(project -> toDto(project, null));
     }
 
     @Transactional
@@ -56,10 +56,11 @@ public class ProjectService {
             throw new IllegalArgumentException("Project name already exists");
         }
 
-        String apiKey = generateUniqueApiKey();
+        String plaintextKey = generateUniqueApiKey();
         Project project = Project.builder()
                 .name(name)
-                .apiKey(apiKey)
+                .apiKeyHash(ProjectApiKeyGenerator.hash(plaintextKey))
+                .apiKeyPrefix(ProjectApiKeyGenerator.prefix(plaintextKey))
                 .webhookUrl(normalizeWebhookUrl(request.webhookUrl()))
                 .isActive(Boolean.TRUE)
                 .build();
@@ -75,7 +76,7 @@ public class ProjectService {
         alertRuleRepository.save(defaultRule);
         refreshCaches();
 
-        return toDto(saved, false);
+        return toDto(saved, plaintextKey);
     }
 
     @Transactional
@@ -105,7 +106,7 @@ public class ProjectService {
 
         Project saved = projectRepository.save(existing);
         refreshCaches();
-        return Optional.of(toDto(saved, true));
+        return Optional.of(toDto(saved, null));
     }
 
     @Transactional
@@ -115,15 +116,17 @@ public class ProjectService {
             return Optional.empty();
         }
         Project existing = existingOpt.get();
-        existing.setApiKey(generateUniqueApiKey());
+        String plaintextKey = generateUniqueApiKey();
+        existing.setApiKeyHash(ProjectApiKeyGenerator.hash(plaintextKey));
+        existing.setApiKeyPrefix(ProjectApiKeyGenerator.prefix(plaintextKey));
         Project saved = projectRepository.save(existing);
-        return Optional.of(toDto(saved, false));
+        return Optional.of(toDto(saved, plaintextKey));
     }
 
     private String generateUniqueApiKey() {
         for (int attempt = 0; attempt < 5; attempt++) {
             String candidate = ProjectApiKeyGenerator.generate();
-            if (!projectRepository.existsByApiKey(candidate)) {
+            if (!projectRepository.existsByApiKeyHash(ProjectApiKeyGenerator.hash(candidate))) {
                 return candidate;
             }
         }
@@ -135,10 +138,10 @@ public class ProjectService {
         alertRuleCacheService.refresh();
     }
 
-    private ProjectDTO toDto(Project project, boolean maskApiKey) {
-        String apiKey = maskApiKey
-                ? ProjectApiKeyGenerator.mask(project.getApiKey())
-                : project.getApiKey();
+    private ProjectDTO toDto(Project project, String plaintextApiKey) {
+        String apiKey = plaintextApiKey != null
+                ? plaintextApiKey
+                : ProjectApiKeyGenerator.maskFromPrefix(project.getApiKeyPrefix());
         return new ProjectDTO(
                 project.getId(),
                 project.getName(),

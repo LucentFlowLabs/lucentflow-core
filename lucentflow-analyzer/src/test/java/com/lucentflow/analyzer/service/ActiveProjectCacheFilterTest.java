@@ -68,11 +68,15 @@ class ActiveProjectCacheFilterTest {
     }
 
     private static Project activeProject(Long id, String webhook) {
-        return Project.builder().id(id).name("active-" + id).apiKey("k" + id).webhookUrl(webhook).isActive(true).build();
+        return Project.builder().id(id).name("active-" + id)
+                .apiKeyHash("hash-active-" + id).apiKeyPrefix("active")
+                .webhookUrl(webhook).isActive(true).build();
     }
 
     private static Project inactiveProject(Long id, String webhook) {
-        return Project.builder().id(id).name("inactive-" + id).apiKey("k" + id).webhookUrl(webhook).isActive(false).build();
+        return Project.builder().id(id).name("inactive-" + id)
+                .apiKeyHash("hash-inactive-" + id).apiKeyPrefix("inactiv")
+                .webhookUrl(webhook).isActive(false).build();
     }
 
     private static AlertRule ruleFor(Project project) {

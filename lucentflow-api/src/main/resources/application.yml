@@ -67,6 +67,12 @@ lucentflow:
     global-risk-threshold: ${LUCENTFLOW_ALERT_GLOBAL_RISK_THRESHOLD:70}
   admin:
     api-key: ${LUCENTFLOW_ADMIN_API_KEY:}
+  api:
+    # 0 disables the limit. Daily quota is checked against project_api_usage for CURRENT_DATE.
+    daily-request-quota: ${LUCENTFLOW_API_DAILY_REQUEST_QUOTA:100000}
+    rate-limit-per-minute: ${LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE:120}
+    # Soft throttle for unauthenticated public whales/sync endpoints (per client IP).
+    public-rate-limit-per-minute: ${LUCENTFLOW_API_PUBLIC_RATE_LIMIT_PER_MINUTE:60}
 
 logging:
   file:

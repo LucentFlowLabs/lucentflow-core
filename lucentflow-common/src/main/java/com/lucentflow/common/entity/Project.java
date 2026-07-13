@@ -37,8 +37,17 @@ public class Project {
     @Column(name = "name", nullable = false, length = 120)
     private String name;
 
-    @Column(name = "api_key", nullable = false, unique = true, length = 128)
-    private String apiKey;
+    /**
+     * SHA-256 hex of the project API key (plaintext is never persisted).
+     */
+    @Column(name = "api_key_hash", nullable = false, unique = true, length = 64)
+    private String apiKeyHash;
+
+    /**
+     * First characters of the plaintext key for masked display only.
+     */
+    @Column(name = "api_key_prefix", nullable = false, length = 16)
+    private String apiKeyPrefix;
 
     @Column(name = "webhook_url", length = 1024)
     private String webhookUrl;

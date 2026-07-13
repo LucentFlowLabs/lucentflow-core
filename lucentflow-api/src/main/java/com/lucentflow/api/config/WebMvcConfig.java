@@ -2,6 +2,7 @@ package com.lucentflow.api.config;
 
 import com.lucentflow.api.security.AdminKeyInterceptor;
 import com.lucentflow.api.security.ApiKeyInterceptor;
+import com.lucentflow.api.security.PublicApiRateLimitInterceptor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
@@ -19,6 +20,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
 
     private final ApiKeyInterceptor apiKeyInterceptor;
     private final AdminKeyInterceptor adminKeyInterceptor;
+    private final PublicApiRateLimitInterceptor publicApiRateLimitInterceptor;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
@@ -31,5 +33,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/api/v1/forensics/**",
                         "/api/v1/alert-rules/**",
                         "/api/v1/usage/**");
+
+        // Platform free tier: public whales/sync remain unauthenticated, soft-throttled by IP.
+        registry.addInterceptor(publicApiRateLimitInterceptor)
+                .addPathPatterns(
+                        "/api/v1/whales",
+                        "/api/v1/whales/**",
+                        "/api/v1/sync-status");
     }
 }
