@@ -1,5 +1,6 @@
 package com.lucentflow.api.config;
 
+import com.lucentflow.api.security.AdminKeyInterceptor;
 import com.lucentflow.api.security.ApiKeyInterceptor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Configuration;
@@ -17,10 +18,18 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebMvcConfig implements WebMvcConfigurer {
 
     private final ApiKeyInterceptor apiKeyInterceptor;
+    private final AdminKeyInterceptor adminKeyInterceptor;
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(adminKeyInterceptor)
+                .addPathPatterns("/api/v1/admin/**");
+
         registry.addInterceptor(apiKeyInterceptor)
-                .addPathPatterns("/api/v1/watchlist/**", "/api/v1/forensics/**");
+                .addPathPatterns(
+                        "/api/v1/watchlist/**",
+                        "/api/v1/forensics/**",
+                        "/api/v1/alert-rules/**",
+                        "/api/v1/usage/**");
     }
 }

@@ -37,6 +37,7 @@ public class TransactionPipe {
         int attempt = 0;
         while (!queue.offer(tx, 1, TimeUnit.SECONDS)) {
             attempt++;
+            backpressureEvents.incrementAndGet();
             if (attempt % 5 == 0) { // Log every 5 seconds of waiting
                 log.warn("[STALL-ALERT] Producer waiting {}s for pipe space. Size: {}", attempt, queue.size());
             }
@@ -64,9 +65,6 @@ public class TransactionPipe {
         return queue.size();
     }
 
-    /**
-     * Statistics for Metabase/Log monitoring.
-     */
     public String getStatistics() {
         double fillRate = (double) queue.size() / QUEUE_CAPACITY * 100;
         return String.format(
@@ -79,6 +77,10 @@ public class TransactionPipe {
                 totalProcessed.get(),
                 backpressureEvents.get()
         );
+    }
+
+    public long getBackpressureEvents() {
+        return backpressureEvents.get();
     }
 
     @Scheduled(fixedDelay = 5000)

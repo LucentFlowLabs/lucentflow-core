@@ -85,8 +85,11 @@ curl http://localhost:8080/actuator/health
 
 **Response Fields (ID=1 Protocol):**
 - `lastScannedBlock`: Latest block number successfully indexed (`0` when not started)
+- `chainHeadBlock`: Chain tip at last indexer heartbeat (nullable)
+- `blockLag`: `chainHeadBlock - lastScannedBlock` (nullable)
+- `blocksPerSecond`: Approximate indexing throughput (nullable)
 - `syncStatus`: `ACTIVE` when row **id=1** exists in `sync_status`, otherwise `NOT_STARTED`
-- `createdAt` / `updatedAt`: Row timestamps from `sync_status` (nullable when not started)
+- `createdAt` / `updatedAt`: Row timestamps as ISO-8601 UTC (nullable when not started)
 
 **Example Request:**
 ```bash
@@ -97,6 +100,9 @@ curl "http://localhost:8080/api/v1/sync-status"
 ```json
 {
   "lastScannedBlock": 43213473,
+  "chainHeadBlock": 43213510,
+  "blockLag": 37,
+  "blocksPerSecond": 12.5,
   "createdAt": "2024-03-17T03:06:58.769Z",
   "updatedAt": "2024-03-17T03:07:00.483Z",
   "syncStatus": "ACTIVE"
@@ -107,13 +113,16 @@ curl "http://localhost:8080/api/v1/sync-status"
 ```json
 {
   "lastScannedBlock": 0,
+  "chainHeadBlock": null,
+  "blockLag": null,
+  "blocksPerSecond": null,
   "createdAt": null,
   "updatedAt": null,
   "syncStatus": "NOT_STARTED"
 }
 ```
 
-**Note:** Chain tip, block lag, and pipeline state are exposed via **Metabase / operational SQL** (see `docs/metabase.md` and `INFRASTRUCTURE.md`), not this minimal JSON contract.
+**Note:** As of **v1.2.0-STABLE**, `chainHeadBlock`, `blockLag`, and `blocksPerSecond` are included in this JSON response. Metabase SQL dashboards remain available in `docs/metabase.md`.
 
 ---
 
@@ -497,6 +506,44 @@ curl http://localhost:8080/api/v1/whales?minEth=100&page=0&size=5
 4. **Security Standards**: OWASP compliance for API security
 5. **Documentation**: Always keep API docs in sync with implementation
 
+### Forensic query scope
+
+When a project has **no watchlist entries**, forensic queries apply **risk score and filter parameters only** (full dataset). Once watchlist addresses exist, results are restricted to transactions touching those addresses.
+
+---
+
+## B2B Project-Scoped APIs (v1.2.0)
+
+All endpoints below require the **`X-Project-Key`** header unless noted.
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/api/v1/forensics/events` | GET | Project | Paginated forensic event query |
+| `/api/v1/forensics/events/export/json` | GET | Project | Streaming JSON export |
+| `/api/v1/forensics/events/export/csv` | GET | Project | Streaming CSV export |
+| `/api/v1/watchlist` | CRUD | Project | Project-scoped watchlist |
+| `/api/v1/alert-rules` | GET/PUT | Project | Alert thresholds and routing rules |
+| `/api/v1/usage?days=30` | GET | Project | Daily API request counters |
+
+### Admin APIs
+
+Require **`X-Admin-Key`** (`LUCENTFLOW_ADMIN_API_KEY`). Returns **503** when unset.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/admin/projects` | GET/POST | List or create projects |
+| `/api/v1/admin/projects/{id}` | GET/PUT | Get or update project |
+| `/api/v1/admin/projects/{id}/rotate-key` | POST | Rotate project API key |
+| `/api/v1/admin/projects/{id}/usage` | GET | Usage stats for any project |
+
+### Demo bootstrap
+
+```bash
+psql -h localhost -U admin -d lucentflow -f lucentflow-api/src/main/resources/db/demo_setup.sql
+```
+
+Demo key: `demo-project-key-2026`
+
 ---
 
 ## SDK Integration
@@ -551,4 +598,4 @@ def format_eth_for_display(value_eth: str) -> str:
 
 ---
 
-*API Documentation maintained for LucentFlow v1.0.0-RELEASE with Spring Boot 3.4*
+*API Documentation maintained for LucentFlow v1.2.0-STABLE with Spring Boot 3.4*

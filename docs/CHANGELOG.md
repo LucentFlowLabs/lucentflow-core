@@ -4,6 +4,38 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 
 ---
 
+## [v1.2.0] — 2026-05-24 (STABLE)
+
+### B2B Productization (P0–P1)
+
+- **Forensic query API** — `/api/v1/forensics/events` with JPA Specifications, forced pagination, project-scoped watchlist filtering.
+- **Export** — Streaming JSON/CSV export endpoints with UTF-8 BOM for CSV.
+- **Webhook alerts** — Multi-provider fan-out (`Telegram`, project webhook) with HMAC-SHA256 signing (`X-LucentFlow-Signature`).
+- **Watchlist** — Project-scoped CRUD with in-memory O(1) cache for pipeline evaluation.
+- **Alert rules (Run-1)** — Per-project thresholds; watchlist hits bypass minimum score; `AlertRuleCacheService` hot-reload.
+- **Project admin (Run-2)** — Admin CRUD at `/api/v1/admin/projects`, API key rotation, daily usage metering in `project_api_usage`.
+- **Risk scoring** — Normalized 0–100 profile with JSONB dimension reasons (`V11` migration).
+
+### Technical debt (Run-3)
+
+- **`TransactionPipe.backpressureEvents`** — Counter now increments on queue stall; unit test added.
+- **`sync_status` ID=1 protocol** — `V16` consolidates stray rows and adds `CHECK (id = 1)`; deprecated `BaseBlockPoller` removed.
+- **`SyncStatus` timestamps** — Migrated from `LocalDateTime` to `Instant`; V9 metrics exposed on `/api/v1/sync-status`; `sync_status` column mapped.
+- **Swagger** — Removed global project-key requirement from public whale/sync endpoints; license aligned to Apache 2.0.
+- **Maven `${revision}`** — Bumped to `1.2.0-STABLE` to match banner and docs.
+- **Forensics empty watchlist** — New projects without watchlist entries can query by risk filters on full dataset.
+- **API usage metering** — Counts only HTTP 2xx responses.
+- **`BasescanConfigTest`** — Fixed H2 test profile with mocked indexer/analyzer workers.
+
+### Database migrations
+
+- `V13` projects + watchlist scope
+- `V14` alert_rules
+- `V15` project_api_usage
+- `V16` sync_status singleton enforcement
+
+---
+
 ## [v1.1.0] — 2026-04-03 (STABLE)
 
 ### Highlights — Sovereign Forensic OS & Adaptive Runtime

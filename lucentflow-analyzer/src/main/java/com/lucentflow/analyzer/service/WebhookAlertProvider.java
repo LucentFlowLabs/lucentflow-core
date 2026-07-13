@@ -75,7 +75,12 @@ public class WebhookAlertProvider implements AlertProvider {
 
     @Override
     public void sendHighRiskAlertAsync(WhaleTransaction tx, AlertDispatchContext context) {
-        if (tx == null || webhookUrl == null || webhookUrl.isBlank()) {
+        if (tx == null) {
+            return;
+        }
+        // Project webhook OR global fallback — do not require lucentflow.webhook.url when
+        // AlertDispatchContext already carries a project-scoped URL.
+        if (resolveTargetWebhookUrl(context) == null) {
             return;
         }
         CompletableFuture.runAsync(() -> doSendWithRetry(tx, context), WEBHOOK_EXECUTOR);
@@ -157,7 +162,11 @@ public class WebhookAlertProvider implements AlertProvider {
         return payload;
     }
 
-    private String resolveTargetWebhookUrl(AlertDispatchContext context) {
+    /**
+     * Prefer project webhook URL; fall back to global {@code lucentflow.webhook.url}.
+     * Returns {@code null} when neither is configured.
+     */
+    String resolveTargetWebhookUrl(AlertDispatchContext context) {
         if (context != null && context.projectWebhookUrl() != null && !context.projectWebhookUrl().isBlank()) {
             return context.projectWebhookUrl().trim();
         }

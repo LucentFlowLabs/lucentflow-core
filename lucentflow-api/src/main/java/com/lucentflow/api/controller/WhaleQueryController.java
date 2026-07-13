@@ -9,6 +9,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -36,7 +37,8 @@ import java.util.Optional;
 @Slf4j
 @RestController
 @RequestMapping("/api/v1")
-@Tag(name = "Whale Query API", description = "API for querying whale transactions and sync status")
+@Tag(name = "Whale Query API", description = "Public API for whale transactions and sync status (no API key required).")
+@SecurityRequirements
 public class WhaleQueryController {
     
     private final WhaleTransactionRepository whaleTransactionRepository;
@@ -156,9 +158,12 @@ public class WhaleQueryController {
 
             Map<String, Object> response = new HashMap<>();
             response.put("lastScannedBlock", syncStatus.getLastScannedBlock());
+            response.put("chainHeadBlock", syncStatus.getChainHeadBlock());
+            response.put("blockLag", syncStatus.getBlockLag());
+            response.put("blocksPerSecond", syncStatus.getBlocksPerSecond());
             response.put("createdAt", syncStatus.getCreatedAt());
             response.put("updatedAt", syncStatus.getUpdatedAt());
-            response.put("syncStatus", "ACTIVE");
+            response.put("syncStatus", syncStatus.getSyncStatus() != null ? syncStatus.getSyncStatus() : "ACTIVE");
 
             log.info("Retrieved sync status: last scanned block {}, updated at {}",
                     syncStatus.getLastScannedBlock(), syncStatus.getUpdatedAt());
@@ -167,6 +172,9 @@ public class WhaleQueryController {
         } else {
             Map<String, Object> response = new HashMap<>();
             response.put("lastScannedBlock", 0L);
+            response.put("chainHeadBlock", null);
+            response.put("blockLag", null);
+            response.put("blocksPerSecond", null);
             response.put("createdAt", null);
             response.put("updatedAt", null);
             response.put("syncStatus", "NOT_STARTED");

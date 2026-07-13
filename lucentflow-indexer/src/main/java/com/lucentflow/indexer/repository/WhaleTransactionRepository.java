@@ -11,7 +11,6 @@ import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -112,15 +111,6 @@ public interface WhaleTransactionRepository extends JpaRepository<WhaleTransacti
     Page<WhaleTransaction> findByValueEthBetween(BigDecimal minValue, BigDecimal maxValue, Pageable pageable);
     
     /**
-     * Find whale transactions within a time range
-     * @param startTime Start timestamp
-     * @param endTime End timestamp
-     * @param pageable Pagination information
-     * @return Page of whale transactions within the time range
-     */
-    Page<WhaleTransaction> findByTimestampBetween(LocalDateTime startTime, LocalDateTime endTime, Pageable pageable);
-    
-    /**
      * Find contract creation whale transactions
      * @param pageable Pagination information
      * @return Page of contract creation whale transactions
@@ -135,25 +125,4 @@ public interface WhaleTransactionRepository extends JpaRepository<WhaleTransacti
      */
     @Query("SELECT wt FROM WhaleTransaction wt WHERE wt.gasCostEth > :minGasCost ORDER BY wt.gasCostEth DESC")
     Page<WhaleTransaction> findByGasCostEthGreaterThan(@Param("minGasCost") BigDecimal minGasCost, Pageable pageable);
-    
-    /**
-     * Get whale transaction statistics for a time period
-     * @param startTime Start timestamp
-     * @param endTime End timestamp
-     * @return Array with [total_count, total_value_eth, avg_value_eth]
-     */
-    @Query("SELECT COUNT(wt), SUM(wt.valueEth), AVG(wt.valueEth) FROM WhaleTransaction wt WHERE wt.timestamp BETWEEN :startTime AND :endTime")
-    Object[] getTransactionStatistics(@Param("startTime") LocalDateTime startTime, @Param("endTime") LocalDateTime endTime);
-    
-    /**
-     * Find top whale transactions by value in a time period
-     * @param startTime Start timestamp
-     * @param endTime End timestamp
-     * @param limit Maximum number of results
-     * @return List of top whale transactions by value
-     */
-    @Query("SELECT wt FROM WhaleTransaction wt WHERE wt.timestamp BETWEEN :startTime AND :endTime ORDER BY wt.valueEth DESC")
-    List<WhaleTransaction> findTopTransactionsByValue(@Param("startTime") LocalDateTime startTime, 
-                                                     @Param("endTime") LocalDateTime endTime, 
-                                                     Pageable pageable);
 }

@@ -50,6 +50,27 @@ class TransactionPipeTest {
     }
 
     @Test
+    void shouldIncrementBackpressureEventsWhenQueueIsFull() throws Exception {
+        for (int i = 0; i < 5000; i++) {
+            transactionPipe.push(mock(Transaction.class));
+        }
+
+        Thread producer = Thread.startVirtualThread(() -> {
+            try {
+                transactionPipe.push(mock(Transaction.class));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        Thread.sleep(1500);
+        assertThat(transactionPipe.getBackpressureEvents()).isGreaterThan(0);
+
+        transactionPipe.drainBatch(1);
+        producer.join(5000);
+    }
+
+    @Test
     void shouldProvideAccurateStatistics() throws InterruptedException {
         transactionPipe.push(mock(Transaction.class));
         String stats = transactionPipe.getStatistics();

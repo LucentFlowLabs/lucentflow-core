@@ -2,10 +2,8 @@ package com.lucentflow.common.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
-import org.springframework.data.annotation.CreatedDate;
-import org.springframework.data.annotation.LastModifiedDate;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * JPA Entity for persistent blockchain synchronization state management.
@@ -30,11 +28,13 @@ import java.time.LocalDateTime;
 public class SyncStatus {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @Column(name = "last_scanned_block", nullable = false)
     private Long lastScannedBlock;
+
+    @Column(name = "sync_status", length = 32)
+    private String syncStatus;
 
     @Column(name = "chain_head_block")
     private Long chainHeadBlock;
@@ -46,12 +46,10 @@ public class SyncStatus {
     private Double blocksPerSecond;
 
     @Column(name = "updated_at", nullable = false)
-    @LastModifiedDate
-    private LocalDateTime updatedAt;
+    private Instant updatedAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
-    @CreatedDate
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 
     /**
      * JPA lifecycle callback executed before entity persistence.
@@ -61,7 +59,13 @@ public class SyncStatus {
      */
     @PrePersist
     protected void onCreate() {
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
+        if (id == null) {
+            id = 1L;
+        }
+        if (syncStatus == null) {
+            syncStatus = "ACTIVE";
+        }
         createdAt = now;
         updatedAt = now;
     }
@@ -74,7 +78,7 @@ public class SyncStatus {
      */
     @PreUpdate
     protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
+        updatedAt = Instant.now();
     }
 
     /**

@@ -4,7 +4,26 @@
 
 LucentFlow supports **Hybrid Development Mode** for optimal Base network development experience. This architecture combines Dockerized infrastructure services with local application execution, enabling rapid iteration while maintaining production-like database persistence and configuration.
 
-**v1.1.0-STABLE** adds a **sovereign CLI path**: build once, run a **root-mirrored fat JAR** with **Adaptive Environment Sensing**—no wall of `-D` flags required for typical workflows.
+**v1.2.0-STABLE** adds **B2B project APIs** (forensics, watchlist, alert rules, usage metering) on top of the v1.1.0 sovereign CLI path.
+
+---
+
+## Demo & project keys (v1.2.0)
+
+Load demo project, watchlist, alert rule, and sample usage:
+
+```bash
+psql -h localhost -U admin -d lucentflow -f lucentflow-api/src/main/resources/db/demo_setup.sql
+```
+
+| Variable | Purpose |
+|----------|---------|
+| `X-Project-Key: demo-project-key-2026` | Project-scoped forensics / watchlist / alert-rules / usage |
+| `LUCENTFLOW_ADMIN_API_KEY` | Admin project CRUD at `/api/v1/admin/projects` |
+
+**Production:** Delete or rotate bootstrap keys (`default-dev-key` from Flyway V13, demo keys from `demo_setup.sql`) before exposing the API publicly.
+
+Swagger UI: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html) — public endpoints (`/whales`, `/sync-status`) need no key; project and admin endpoints use separate security schemes.
 
 ---
 
@@ -302,7 +321,7 @@ LucentFlow follows a **layered modular architecture** promoting clean dependenci
 
 ```
 lucentflow/
-├── lucentflow-parent/          # Parent POM with version management
+├── pom.xml                     # Parent POM (${revision}) and dependency management
 ├── lucentflow-common/           # Shared utilities and constants
 ├── lucentflow-chain-sdk/        # Base network integration
 ├── lucentflow-indexer/          # Blockchain data processing
@@ -633,4 +652,4 @@ docker-compose -f lucentflow-deployment/docker/docker-compose.yml up --build -d
 
 **Hybrid Development Mode provides best of both worlds: production-like infrastructure with development speed and flexibility.**
 
-*Local development guide maintained for LucentFlow **v1.1.0-STABLE** — Java 21 Virtual Threads & Adaptive Environment Engine.*
+*Local development guide maintained for LucentFlow **v1.2.0-STABLE** — Java 21 Virtual Threads & B2B Project APIs.*

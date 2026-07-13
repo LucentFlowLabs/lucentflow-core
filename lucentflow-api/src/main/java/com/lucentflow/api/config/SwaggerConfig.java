@@ -5,7 +5,6 @@ import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.info.Contact;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.info.License;
-import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.servers.Server;
 import org.springframework.context.annotation.Bean;
@@ -43,23 +42,30 @@ public class SwaggerConfig {
         return new OpenAPI()
                 .info(new Info()
                         .title("LucentFlow API")
-                        .description("Forensics and watchlist APIs for project-scoped Base monitoring. "
-                                + "All /api/v1/forensics and /api/v1/watchlist endpoints require X-Project-Key.")
+                        .description("Forensics, watchlist, alert-rules, and usage APIs for project-scoped Base monitoring. "
+                                + "Public endpoints: /api/v1/whales, /api/v1/sync-status, /api/v1/whales/stats. "
+                                + "Project endpoints require X-Project-Key. "
+                                + "Admin project management requires X-Admin-Key (LUCENTFLOW_ADMIN_API_KEY).")
                         .version("1.2.0-STABLE")
                         .contact(new Contact()
                                 .name("LucentFlow Team")
                                 .email("info@lucentflow.io")
                                 .url("https://lucentflow.io"))
                         .license(new License()
-                                .name("MIT License")
-                                .url("https://opensource.org/licenses/MIT")))
+                                .name("Apache License 2.0")
+                                .url("https://www.apache.org/licenses/LICENSE-2.0")))
                 .components(new Components().addSecuritySchemes("projectKey",
                         new SecurityScheme()
                                 .type(SecurityScheme.Type.APIKEY)
                                 .in(SecurityScheme.In.HEADER)
                                 .name("X-Project-Key")
-                                .description("Project API key used for multi-project scope isolation.")))
-                .addSecurityItem(new SecurityRequirement().addList("projectKey"))
+                                .description("Project API key used for multi-project scope isolation."))
+                        .addSecuritySchemes("adminKey",
+                                new SecurityScheme()
+                                        .type(SecurityScheme.Type.APIKEY)
+                                        .in(SecurityScheme.In.HEADER)
+                                        .name("X-Admin-Key")
+                                        .description("Admin API key (LUCENTFLOW_ADMIN_API_KEY). Returns 503 when unset.")))
                 .servers(List.of(
                         new Server()
                                 .url("http://localhost:8080")

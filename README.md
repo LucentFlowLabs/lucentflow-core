@@ -1,5 +1,5 @@
 <!--
-  LucentFlow project overview — v1.1.0-STABLE
+  LucentFlow project overview — v1.2.0-STABLE
   @author ArchLucent
   @since 1.1
 -->
@@ -13,7 +13,7 @@
        /_/                  /____/                        
 ```
 
-# LucentFlow · v1.1.0-STABLE
+# LucentFlow · v1.2.0-STABLE
 
 **High-Performance Sovereign Asset Security & Forensic OS for Base L2**
 
@@ -22,7 +22,7 @@
 ![Base L2](https://img.shields.io/badge/Base-L2-blue?style=flat)
 ![ZGC](https://img.shields.io/badge/GC-ZGC%20Generational-darkgreen?style=flat)
 ![Virtual Threads](https://img.shields.io/badge/Threads-Virtual%20(Loom)-purple?style=flat)
-![Version](https://img.shields.io/badge/Version-1.1.0--STABLE-blue?style=flat)
+![Version](https://img.shields.io/badge/Version-1.2.0--STABLE-blue?style=flat)
 
 > **Sovereign infrastructure:** you own the stack, the keys, and the audit trail. LucentFlow is built for **resilience** under RPC pressure, **data sovereignty** on your hardware, and **high-throughput** forensic analysis—without sacrificing cryptographic rigor.
 
@@ -32,7 +32,21 @@
 
 ## Why LucentFlow
 
-LucentFlow is an industrial-grade sentinel for **Base L2**: it monitors whale-scale flows, scores creator risk, and traces funding origins with **recursive, evidence-grade forensics**. Version **1.1.0-STABLE** introduces an **Adaptive Environment Sensing Engine**—the runtime discovers configuration and proxies automatically so operators can ship faster with fewer footguns.
+LucentFlow is an industrial-grade sentinel for **Base L2**: it monitors whale-scale flows, scores creator risk, and traces funding origins with **recursive, evidence-grade forensics**. Version **1.2.0-STABLE** adds **B2B project isolation**—forensic query APIs, watchlist, per-project alert rules, webhook delivery, and API usage metering for multi-tenant deployments.
+
+---
+
+## B2B Product APIs (v1.2.0)
+
+| Area | Capability |
+|------|------------|
+| **Forensics** | REST query + CSV/JSON export with project-scoped watchlist filtering |
+| **Alert rules** | Per-project thresholds (`minRiskScore`, `watchlistOnly`, `contractCreationOnly`) |
+| **Webhooks** | HMAC-signed project webhook delivery with Telegram fallback |
+| **Multi-project** | `X-Project-Key` isolation; admin CRUD via `X-Admin-Key` |
+| **Usage metering** | Daily per-project API counters in `project_api_usage` |
+
+See [`docs/API-DOCUMENTATION.md`](docs/API-DOCUMENTATION.md) for endpoint reference and demo bootstrap (`db/demo_setup.sql`).
 
 ---
 

@@ -8,7 +8,7 @@ spring:
     url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
     driver-class-name: org.h2.Driver
     username: sa
-    password: 
+    password:
   jpa:
     hibernate:
       ddl-auto: create-drop
@@ -16,7 +16,8 @@ spring:
     enabled: false
 
 lucentflow:
-  blockchain:
-    # Force a tiny range in tests to prevent runaway polling
-    batch-size: 1
-    max-blocks-per-sync: 1
+  chain:
+    rpc-url: http://localhost:8545
+    rpc-backup-url: http://localhost:8545
+  indexer:
+    scheduler-tick-ms: 86400000

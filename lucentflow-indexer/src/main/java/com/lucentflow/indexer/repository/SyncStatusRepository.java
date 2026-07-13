@@ -26,16 +26,6 @@ import java.util.Optional;
  */
 @Repository
 public interface SyncStatusRepository extends JpaRepository<SyncStatus, Long> {
-    
-    /**
-     * Retrieves the most recent synchronization status record.
-     * 
-     * <p>Uses descending order by ID to find the latest sync status.
-     * Critical for determining blockchain synchronization progress and resumption points.</p>
-     * 
-     * @return Optional containing the latest SyncStatus if present, empty otherwise
-     */
-    Optional<SyncStatus> findFirstByOrderByIdDesc();
 
     /**
      * Updates synchronization progress for a specific row (ID 1 Protocol).

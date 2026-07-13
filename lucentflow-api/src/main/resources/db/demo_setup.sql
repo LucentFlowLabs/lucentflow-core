@@ -1,4 +1,4 @@
--- LucentFlow Demo Bootstrap (Day 7)
+-- LucentFlow Demo Bootstrap (v1.2.0)
 -- Usage:
 --   psql -h <host> -U <user> -d <db> -f src/main/resources/db/demo_setup.sql
 
@@ -15,7 +15,23 @@ SET name = EXCLUDED.name,
     webhook_url = EXCLUDED.webhook_url,
     is_active = EXCLUDED.is_active;
 
--- 2) Add Case #002-style watchlist addresses
+-- 2) Default alert rule for demo project (Run-1)
+INSERT INTO alert_rules (project_id, min_risk_score, watchlist_only, contract_creation_only, enabled)
+SELECT p.id, 70, FALSE, FALSE, TRUE
+FROM projects p
+WHERE p.api_key = 'demo-project-key-2026'
+ON CONFLICT (project_id) DO NOTHING;
+
+-- 3) Sample API usage for demo dashboards (Run-2)
+INSERT INTO project_api_usage (project_id, usage_date, request_count)
+SELECT p.id, CURRENT_DATE, 42
+FROM projects p
+WHERE p.api_key = 'demo-project-key-2026'
+ON CONFLICT (project_id, usage_date)
+DO UPDATE SET request_count = EXCLUDED.request_count,
+              updated_at = CURRENT_TIMESTAMP;
+
+-- 4) Case #002-style watchlist addresses
 WITH demo_project AS (
     SELECT id
     FROM projects
@@ -44,6 +60,10 @@ SELECT * FROM (
 ) seeded
 ON CONFLICT (project_id, address) DO NOTHING;
 
--- 3) Output quick verification hints
--- API key to use in Swagger or curl:
+-- Quick verification hints:
 --   X-Project-Key: demo-project-key-2026
+--   X-Admin-Key:   set LUCENTFLOW_ADMIN_API_KEY in .env for /api/v1/admin/projects
+-- Endpoints:
+--   GET  /api/v1/forensics/events
+--   GET  /api/v1/alert-rules
+--   GET  /api/v1/usage?days=7

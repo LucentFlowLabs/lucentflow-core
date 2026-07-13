@@ -1,5 +1,6 @@
 package com.lucentflow.api.security;
 
+import com.lucentflow.api.service.ProjectApiUsageService;
 import com.lucentflow.common.entity.Project;
 import com.lucentflow.common.repository.ProjectRepository;
 import jakarta.servlet.http.HttpServletRequest;
@@ -22,6 +23,7 @@ public class ApiKeyInterceptor implements HandlerInterceptor {
 
     private static final String API_KEY_HEADER = "X-Project-Key";
     private final ProjectRepository projectRepository;
+    private final ProjectApiUsageService projectApiUsageService;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -41,6 +43,18 @@ public class ApiKeyInterceptor implements HandlerInterceptor {
 
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
-        ProjectContext.clear();
+        try {
+            Long projectId = ProjectContext.getProjectId();
+            if (projectId != null && isSuccessfulResponse(response)) {
+                projectApiUsageService.recordRequestAsync(projectId);
+            }
+        } finally {
+            ProjectContext.clear();
+        }
+    }
+
+    private boolean isSuccessfulResponse(HttpServletResponse response) {
+        int status = response.getStatus();
+        return status >= 200 && status < 300;
     }
 }
