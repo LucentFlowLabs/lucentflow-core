@@ -138,10 +138,7 @@ public class ForensicQueryService {
                 .filter(a -> a != null && !a.isBlank())
                 .map(a -> a.toLowerCase(Locale.ROOT))
                 .collect(java.util.stream.Collectors.toSet());
-        if (addresses.isEmpty()) {
-            // New projects without watchlist entries: apply risk/address filters only.
-            return base;
-        }
+        // Empty watchlist ⇒ empty result set (tenant isolation). addressInSet([]) is a disjunction.
         return base.and(WhaleTransactionSpecifications.addressInSet(addresses));
     }
 

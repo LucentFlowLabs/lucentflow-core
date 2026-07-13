@@ -23,7 +23,9 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 - **`SyncStatus` timestamps** — Migrated from `LocalDateTime` to `Instant`; V9 metrics exposed on `/api/v1/sync-status`; `sync_status` column mapped.
 - **Swagger** — Removed global project-key requirement from public whale/sync endpoints; license aligned to Apache 2.0.
 - **Maven `${revision}`** — Bumped to `1.2.0-STABLE` to match banner and docs.
-- **Forensics empty watchlist** — New projects without watchlist entries can query by risk filters on full dataset.
+- **Forensics empty watchlist** — Empty project watchlist returns **empty** forensic results (tenant isolation; was full-dataset onboarding in earlier 1.2 drafts).
+- **Inactive projects** — Alert/watchlist pipeline caches skip `is_active=false` projects.
+- **Bootstrap key revoke** — `V17` deactivates and rotates the well-known V13 `default-dev-key`.
 - **API usage metering** — Counts only HTTP 2xx responses.
 - **`BasescanConfigTest`** — Fixed H2 test profile with mocked indexer/analyzer workers.
 
@@ -33,6 +35,7 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 - `V14` alert_rules
 - `V15` project_api_usage
 - `V16` sync_status singleton enforcement
+- `V17` revoke bootstrap `default-dev-key`
 
 ---
 

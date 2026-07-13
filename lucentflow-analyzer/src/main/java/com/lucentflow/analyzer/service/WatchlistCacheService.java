@@ -38,9 +38,16 @@ public class WatchlistCacheService {
     public synchronized void refresh() {
         Map<String, ConcurrentHashMap<Long, WatchlistMeta>> latest = new ConcurrentHashMap<>();
         for (Watchlist item : watchlistRepository.findAll()) {
+            if (item.getProject() == null || item.getProject().getId() == null) {
+                continue;
+            }
+            // Inactive projects must not trigger watchlist-priority alerts.
+            if (!Boolean.TRUE.equals(item.getProject().getIsActive())) {
+                continue;
+            }
             String normalized = normalize(item.getAddress());
-            Long projectId = item.getProject() == null ? null : item.getProject().getId();
-            if (normalized != null && projectId != null) {
+            Long projectId = item.getProject().getId();
+            if (normalized != null) {
                 latest.computeIfAbsent(normalized, key -> new ConcurrentHashMap<>())
                         .put(projectId, new WatchlistMeta(
                                 item.getLabel(),
@@ -51,7 +58,7 @@ public class WatchlistCacheService {
         }
         cache.clear();
         cache.putAll(latest);
-        log.info("[WATCHLIST] Cache refreshed: {} entries loaded", cache.size());
+        log.info("[WATCHLIST] Cache refreshed: {} active-project address keys loaded", cache.size());
     }
 
     public boolean isWatched(String address) {

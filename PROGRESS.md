@@ -125,10 +125,10 @@ flowchart LR
 | Entity tags | ● | | |
 | Projects + API keys | ● | | Seed key hygiene |
 | Watchlist isolation | ● | | |
-| Alert rules + cache | ● | | Inactive project still alerted |
-| Webhook HMAC fan-out | ● | Global URL gate | |
+| Alert rules + cache | ● | | |
+| Webhook HMAC fan-out | ● | | |
 | API usage metering | ● | | No quota enforcement |
-| Forensic query / export | ● | Empty-watchlist full-scan policy | |
+| Forensic query / export | ● | | |
 | Public `/whales` | ● | | Unauthenticated full dataset |
 | Event-driven `AnalysisOrchestrator` | | Dead path | No `WhaleDetectedEvent` publisher |
 | Split deploy / K8s | | | Monolith only |
@@ -143,19 +143,19 @@ flowchart LR
 1. **~~Project webhook blocked by global URL gate~~** ✅ Fixed (2026-07-13)  
    `sendHighRiskAlertAsync` now gates on `resolveTargetWebhookUrl(context)` (project URL **or** global fallback), so project-only webhook configs deliver correctly. Covered by `WebhookAlertProviderTest`.
 
-2. **Forensic empty-watchlist = full dataset**  
-   Intentional onboarding behavior in `ForensicQueryService`, but any valid `X-Project-Key` with an empty watchlist can query/export the entire whale corpus. Document as SLA boundary or require min watchlist / force empty result.
+2. **~~Forensic empty-watchlist = full dataset~~** ✅ Fixed (2026-07-13)  
+   Empty project watchlist now yields an empty forensic result set via `addressInSet([])` disjunction (tenant isolation).
 
-3. **Public whale APIs vs B2B narrative**  
-   `/api/v1/whales`, `/whales/stats`, `/sync-status` remain unauthenticated. Fine as a platform data plane; conflict if forensic access is the paid surface—product decision needed.
-
-4. **Bootstrap keys in schema / demo**  
-   V13 seeds `default-dev-key`; `demo_setup.sql` uses `demo-project-key-2026`. Docs warn operators; production must rotate/disable before public exposure.
+3. **~~Bootstrap keys in schema / demo~~** ✅ Hardened (2026-07-13)  
+   Flyway **V17** deactivates and rotates the well-known V13 `default-dev-key`. `demo_setup.sql` is documented as local/demo only.
 
 ### 5.2 Medium priority
 
-5. **Inactive projects still receive pipeline alerts**  
-   `AlertRuleCacheService.refresh()` loads all rules without filtering `projects.is_active`. Deactivation only blocks API keys.
+4. **~~Inactive projects still receive pipeline alerts~~** ✅ Fixed (2026-07-13)  
+   `AlertRuleCacheService` / `WatchlistCacheService` refresh skip `is_active=false` projects (`ActiveProjectCacheFilterTest`).
+
+5. **Public whale APIs vs B2B narrative**  
+   `/api/v1/whales`, `/whales/stats`, `/sync-status` remain unauthenticated. Fine as a platform data plane; conflict if forensic access is the paid surface—product decision needed.
 
 6. **Dual analysis architecture**  
    Live path: `WhaleAnalysisWorker`. Unused path: `WhaleDetectedEvent` + `AnalysisOrchestrator` + handlers (no publisher found). Consolidate or delete to reduce cognitive load.
@@ -183,7 +183,7 @@ flowchart LR
 
 ---
 
-## 6. Database Migrations (V1–V16)
+## 6. Database Migrations (V1–V17)
 
 | Ver | Purpose |
 |-----|---------|
@@ -202,6 +202,7 @@ flowchart LR
 | V14 | **`alert_rules`** (1:1 per project) |
 | V15 | **`project_api_usage`** daily counters |
 | V16 | **`sync_status` singleton** `CHECK (id = 1)` |
+| V17 | **Revoke** well-known V13 `default-dev-key` (deactivate + rotate) |
 
 ---
 
@@ -237,11 +238,13 @@ Interactive docs: Swagger UI at `/swagger-ui/index.html`.
 | Priority | Action | Why |
 |----------|--------|-----|
 | P0 | Fix webhook global-URL early return | ✅ Fixed 2026-07-13 — gate now accepts project URL or global URL |
-| P1 | Filter inactive projects in alert/watchlist caches | Honor admin deactivate |
-| P1 | Decide forensic empty-watchlist policy | Tenant data boundary |
+| P1 | Filter inactive projects in alert/watchlist caches | ✅ Fixed 2026-07-13 |
+| P1 | Forensic empty-watchlist → empty results | ✅ Fixed 2026-07-13 |
+| P1 | Revoke bootstrap `default-dev-key` (V17) | ✅ Fixed 2026-07-13 |
 | P2 | Add quota/rate-limit on top of usage metering | Monetization readiness |
 | P2 | Integration tests for B2B controllers | Regression safety |
 | P2 | Hash API keys at rest | Breach blast-radius |
+| P2 | Decide auth for public `/whales` | Product / pricing boundary |
 | P3 | Remove or wire `WhaleDetectedEvent` path | Architecture clarity |
 | P3 | Sink repositories to common / persistence module | Dependency hygiene |
 | P3 | Roadmap: Neo4j / Trace 3.0 / optional process split | Phase 4 vision |

@@ -1,4 +1,7 @@
 -- LucentFlow Demo Bootstrap (v1.2.0)
+-- LOCAL / DEMO ONLY — do NOT run against production databases.
+-- The Flyway V13 bootstrap key (default-dev-key) is revoked by V17; use this script
+-- or Admin API (X-Admin-Key) to provision a local project instead.
 -- Usage:
 --   psql -h <host> -U <user> -d <db> -f src/main/resources/db/demo_setup.sql
 

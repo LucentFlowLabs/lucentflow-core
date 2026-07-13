@@ -21,7 +21,7 @@ psql -h localhost -U admin -d lucentflow -f lucentflow-api/src/main/resources/db
 | `X-Project-Key: demo-project-key-2026` | Project-scoped forensics / watchlist / alert-rules / usage |
 | `LUCENTFLOW_ADMIN_API_KEY` | Admin project CRUD at `/api/v1/admin/projects` |
 
-**Production:** Delete or rotate bootstrap keys (`default-dev-key` from Flyway V13, demo keys from `demo_setup.sql`) before exposing the API publicly.
+**Production:** Flyway **V17** revokes the V13 `default-dev-key` bootstrap credential (project deactivated + key rotated). Never load `demo_setup.sql` on production; create tenants via Admin API and rotate keys before public exposure.
 
 Swagger UI: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html) — public endpoints (`/whales`, `/sync-status`) need no key; project and admin endpoints use separate security schemes.
 

@@ -508,7 +508,7 @@ curl http://localhost:8080/api/v1/whales?minEth=100&page=0&size=5
 
 ### Forensic query scope
 
-When a project has **no watchlist entries**, forensic queries apply **risk score and filter parameters only** (full dataset). Once watchlist addresses exist, results are restricted to transactions touching those addresses.
+Project-scoped forensic queries are **restricted to the project's watchlist addresses**. When a project has **no watchlist entries**, queries and exports return an **empty result set** (tenant isolation). Add watchlist addresses before expecting forensic data.
 
 ---
 

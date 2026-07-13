@@ -44,11 +44,15 @@ public class AlertRuleCacheService {
             if (rule.getProject() == null || rule.getProject().getId() == null) {
                 continue;
             }
+            // Inactive projects must not receive pipeline alerts.
+            if (!Boolean.TRUE.equals(rule.getProject().getIsActive())) {
+                continue;
+            }
             latest.put(rule.getProject().getId(), toSnapshot(rule));
         }
         cache.clear();
         cache.putAll(latest);
-        log.info("[ALERT-RULE] Cache refreshed: {} project rules loaded", cache.size());
+        log.info("[ALERT-RULE] Cache refreshed: {} active project rules loaded", cache.size());
     }
 
     public Collection<ProjectAlertRule> allRules() {
