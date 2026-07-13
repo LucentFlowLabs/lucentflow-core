@@ -16,7 +16,7 @@ import java.sql.ResultSet;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Applies classpath Flyway scripts (V1–V20+) against a real Postgres 16 container.
+ * Applies classpath Flyway scripts (V1–V21+) against a real Postgres 16 container.
  *
  * @author ArchLucent
  * @since 1.2
@@ -41,7 +41,7 @@ class FlywayMigrationIT {
     }
 
     @Test
-    void migratesThroughV20AndCreatesWebhookSecretColumn() throws Exception {
+    void migratesThroughV21SharedRateLimitAndWorkerLease() throws Exception {
         Flyway flyway = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
@@ -52,12 +52,19 @@ class FlywayMigrationIT {
 
         MigrationInfo current = flyway.info().current();
         assertThat(current).isNotNull();
-        assertThat(current.getVersion().getVersion()).isEqualTo("20");
+        assertThat(current.getVersion().getVersion()).isEqualTo("21");
 
         try (Connection connection = DriverManager.getConnection(
-                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-             ResultSet rs = connection.getMetaData().getColumns(null, null, "projects", "webhook_secret")) {
-            assertThat(rs.next()).as("projects.webhook_secret exists").isTrue();
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {
+            try (ResultSet rs = connection.getMetaData().getColumns(null, null, "projects", "webhook_secret")) {
+                assertThat(rs.next()).as("projects.webhook_secret exists").isTrue();
+            }
+            try (ResultSet rs = connection.getMetaData().getTables(null, null, "worker_leases", null)) {
+                assertThat(rs.next()).as("worker_leases exists").isTrue();
+            }
+            try (ResultSet rs = connection.getMetaData().getTables(null, null, "api_rate_limit_buckets", null)) {
+                assertThat(rs.next()).as("api_rate_limit_buckets exists").isTrue();
+            }
         }
     }
 }

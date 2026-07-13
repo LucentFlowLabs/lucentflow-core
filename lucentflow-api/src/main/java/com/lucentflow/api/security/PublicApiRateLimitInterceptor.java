@@ -1,6 +1,7 @@
 package com.lucentflow.api.security;
 
 import com.lucentflow.api.config.ConditionalOnApiEnabled;
+import com.lucentflow.common.ratelimit.SharedRateLimitService;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -9,14 +10,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
-import java.time.Clock;
-import java.time.Instant;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
-
 /**
  * Soft IP rate limit for public platform endpoints (whales / sync-status).
  * Product decision: these routes stay unauthenticated; abuse is throttled instead.
+ * Counters are cluster-shared via PostgreSQL minute buckets.
  *
  * @author ArchLucent
  * @since 1.0
@@ -25,16 +22,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Component
 public class PublicApiRateLimitInterceptor implements HandlerInterceptor {
 
-    private final Clock clock;
-    private final ConcurrentHashMap<String, MinuteWindow> windows = new ConcurrentHashMap<>();
+    private final SharedRateLimitService sharedRateLimitService;
     private int rateLimitPerMinute = 60;
 
-    public PublicApiRateLimitInterceptor() {
-        this.clock = Clock.systemUTC();
+    public PublicApiRateLimitInterceptor(SharedRateLimitService sharedRateLimitService) {
+        this.sharedRateLimitService = sharedRateLimitService;
     }
 
-    PublicApiRateLimitInterceptor(int rateLimitPerMinute, Clock clock) {
-        this.clock = clock;
+    PublicApiRateLimitInterceptor(SharedRateLimitService sharedRateLimitService, int rateLimitPerMinute) {
+        this.sharedRateLimitService = sharedRateLimitService;
         this.rateLimitPerMinute = Math.max(0, rateLimitPerMinute);
     }
 
@@ -50,22 +46,11 @@ public class PublicApiRateLimitInterceptor implements HandlerInterceptor {
             return true;
         }
         String clientKey = resolveClientKey(request);
-        if (!tryAcquire(clientKey)) {
+        if (!sharedRateLimitService.tryAcquire("ip:" + clientKey, rateLimitPerMinute)) {
             response.sendError(HttpStatus.TOO_MANY_REQUESTS.value(), "Public API rate limit exceeded");
             return false;
         }
         return true;
-    }
-
-    private boolean tryAcquire(String clientKey) {
-        long epochMinute = Instant.now(clock).getEpochSecond() / 60L;
-        MinuteWindow window = windows.compute(clientKey, (key, existing) -> {
-            if (existing == null || existing.epochMinute != epochMinute) {
-                return new MinuteWindow(epochMinute, new AtomicInteger(0));
-            }
-            return existing;
-        });
-        return window.count.incrementAndGet() <= rateLimitPerMinute;
     }
 
     private String resolveClientKey(HttpServletRequest request) {
@@ -75,8 +60,5 @@ public class PublicApiRateLimitInterceptor implements HandlerInterceptor {
         }
         String remote = request.getRemoteAddr();
         return remote == null || remote.isBlank() ? "unknown" : remote;
-    }
-
-    private record MinuteWindow(long epochMinute, AtomicInteger count) {
     }
 }

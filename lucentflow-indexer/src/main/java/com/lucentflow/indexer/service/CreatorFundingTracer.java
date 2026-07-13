@@ -3,6 +3,8 @@ package com.lucentflow.indexer.service;
 import com.lucentflow.common.constant.RugRiskLevel;
 import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.indexer.source.BaseBlockSource;
+import com.lucentflow.pipeline.FundingTracerPort;
+import com.lucentflow.pipeline.GenesisTraceOutcome;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
@@ -50,7 +52,7 @@ import java.util.concurrent.Executors;
  */
 @Slf4j
 @Service
-public class CreatorFundingTracer {
+public class CreatorFundingTracer implements FundingTracerPort {
 
     private static final String BASESCAN_USER_AGENT =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
@@ -158,28 +160,13 @@ public class CreatorFundingTracer {
     }
 
     /**
-     * Outcome of Genesis Trace 2.0 (recursive SQL, max three hops).
-     *
-     * @param fundingSourceAddress ultimate funder after hops (may be null)
-     * @param fundingSourceTag     human-readable classification tag
-     * @param blacklisted          true if funder matches blacklist / mixer heuristics
-     * @param layersTraced         hop count returned by SQL (0 if no row)
-     */
-    public record GenesisTraceOutcome(
-            String fundingSourceAddress,
-            String fundingSourceTag,
-            boolean blacklisted,
-            int layersTraced
-    ) {
-    }
-
-    /**
      * Runs Genesis Trace 2.0 on a virtual thread: executes recursive CTE against
      * {@code whale_transactions}. No Java recursion — depth is enforced in SQL.
      *
      * @param address initiator / address to trace (EOA or contract)
      * @return async outcome; empty if no inflow rows exist
      */
+    @Override
     public CompletableFuture<Optional<GenesisTraceOutcome>> traceOriginAsync(String address) {
         if (address == null || address.isBlank()) {
             return CompletableFuture.completedFuture(Optional.empty());
@@ -256,6 +243,7 @@ public class CreatorFundingTracer {
      * @param entity The whale transaction to enrich
      * @return CompletableFuture with enriched entity
      */
+    @Override
     public CompletableFuture<WhaleTransaction> enrichRugMetrics(WhaleTransaction entity) {
         return CompletableFuture.supplyAsync(() -> {
             try {

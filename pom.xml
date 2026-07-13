@@ -218,6 +218,7 @@
     <modules>
         <module>lucentflow-common</module>
         <module>lucentflow-chain-sdk</module>
+        <module>lucentflow-pipeline-contract</module>
         <module>lucentflow-indexer</module>
         <module>lucentflow-analyzer</module>
         <module>lucentflow-api</module>

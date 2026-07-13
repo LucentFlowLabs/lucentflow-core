@@ -1,15 +1,12 @@
 package com.lucentflow.api.security;
 
+import com.lucentflow.common.ratelimit.SharedRateLimitService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -32,12 +29,16 @@ class PublicApiRateLimitInterceptorTest {
     private HttpServletRequest request;
     @Mock
     private HttpServletResponse response;
+    @Mock
+    private SharedRateLimitService sharedRateLimitService;
 
     @Test
     void preHandle_throttlesSameIp() throws Exception {
-        Clock clock = Clock.fixed(Instant.parse("2026-07-13T08:00:00Z"), ZoneOffset.UTC);
-        PublicApiRateLimitInterceptor interceptor = new PublicApiRateLimitInterceptor(2, clock);
+        PublicApiRateLimitInterceptor interceptor =
+                new PublicApiRateLimitInterceptor(sharedRateLimitService, 2);
         when(request.getRemoteAddr()).thenReturn("203.0.113.10");
+        when(sharedRateLimitService.tryAcquire(eq("ip:203.0.113.10"), eq(2)))
+                .thenReturn(true, true, false);
 
         assertThat(interceptor.preHandle(request, response, new Object())).isTrue();
         assertThat(interceptor.preHandle(request, response, new Object())).isTrue();
@@ -47,9 +48,11 @@ class PublicApiRateLimitInterceptorTest {
 
     @Test
     void preHandle_disabledWhenLimitZero() throws Exception {
-        PublicApiRateLimitInterceptor interceptor = new PublicApiRateLimitInterceptor(0, Clock.systemUTC());
+        PublicApiRateLimitInterceptor interceptor =
+                new PublicApiRateLimitInterceptor(sharedRateLimitService, 0);
 
         assertThat(interceptor.preHandle(request, response, new Object())).isTrue();
         verify(response, never()).sendError(anyInt(), anyString());
+        verify(sharedRateLimitService, never()).tryAcquire(anyString(), anyInt());
     }
 }

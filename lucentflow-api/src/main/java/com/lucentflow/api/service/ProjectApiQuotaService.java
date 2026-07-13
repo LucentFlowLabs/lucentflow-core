@@ -1,20 +1,17 @@
 package com.lucentflow.api.service;
 
+import com.lucentflow.common.ratelimit.SharedRateLimitService;
 import com.lucentflow.common.repository.ProjectApiUsageRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
-import java.time.Instant;
 import java.time.LocalDate;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Enforces per-project daily quotas and in-process per-minute rate limits.
+ * Enforces per-project daily quotas and cluster-shared per-minute rate limits.
  *
  * @author ArchLucent
  * @since 1.0
@@ -24,32 +21,43 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class ProjectApiQuotaService {
 
     private final ProjectApiUsageRepository projectApiUsageRepository;
+    private final SharedRateLimitService sharedRateLimitService;
     private final Clock clock;
-    private final ConcurrentHashMap<Long, MinuteWindow> windows = new ConcurrentHashMap<>();
 
     private int dailyRequestQuota = 100_000;
     private int rateLimitPerMinute = 120;
 
     @org.springframework.beans.factory.annotation.Autowired
-    public ProjectApiQuotaService(ProjectApiUsageRepository projectApiUsageRepository) {
+    public ProjectApiQuotaService(
+            ProjectApiUsageRepository projectApiUsageRepository,
+            SharedRateLimitService sharedRateLimitService
+    ) {
         this.projectApiUsageRepository = projectApiUsageRepository;
+        this.sharedRateLimitService = sharedRateLimitService;
         this.clock = Clock.systemUTC();
     }
 
     static ProjectApiQuotaService forTests(
             ProjectApiUsageRepository projectApiUsageRepository,
+            SharedRateLimitService sharedRateLimitService,
             int dailyRequestQuota,
             int rateLimitPerMinute,
             Clock clock
     ) {
-        ProjectApiQuotaService service = new ProjectApiQuotaService(projectApiUsageRepository, clock);
+        ProjectApiQuotaService service = new ProjectApiQuotaService(
+                projectApiUsageRepository, sharedRateLimitService, clock);
         service.dailyRequestQuota = Math.max(0, dailyRequestQuota);
         service.rateLimitPerMinute = Math.max(0, rateLimitPerMinute);
         return service;
     }
 
-    private ProjectApiQuotaService(ProjectApiUsageRepository projectApiUsageRepository, Clock clock) {
+    private ProjectApiQuotaService(
+            ProjectApiUsageRepository projectApiUsageRepository,
+            SharedRateLimitService sharedRateLimitService,
+            Clock clock
+    ) {
         this.projectApiUsageRepository = projectApiUsageRepository;
+        this.sharedRateLimitService = sharedRateLimitService;
         this.clock = clock;
     }
 
@@ -84,20 +92,6 @@ public class ProjectApiQuotaService {
     }
 
     boolean tryAcquireRatePermit(Long projectId) {
-        long epochMinute = Instant.now(clock).getEpochSecond() / 60L;
-        MinuteWindow window = windows.compute(projectId, (id, existing) -> {
-            if (existing == null || existing.epochMinute != epochMinute) {
-                return new MinuteWindow(epochMinute, new AtomicInteger(0));
-            }
-            return existing;
-        });
-        return window.count.incrementAndGet() <= rateLimitPerMinute;
-    }
-
-    Map<Long, MinuteWindow> windowsView() {
-        return windows;
-    }
-
-    record MinuteWindow(long epochMinute, AtomicInteger count) {
+        return sharedRateLimitService.tryAcquire("project:" + projectId, rateLimitPerMinute);
     }
 }

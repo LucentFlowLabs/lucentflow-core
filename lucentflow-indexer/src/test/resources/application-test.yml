@@ -13,3 +13,7 @@ spring:
     show-sql: false
   flyway:
     enabled: false  # Disable Flyway for tests to avoid checksum hell
+
+lucentflow:
+  lease:
+    enabled: false

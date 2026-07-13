@@ -79,6 +79,12 @@ lucentflow:
     # Phase 4 process-split knobs (default: monolith runs both).
     enable-indexer: ${LUCENTFLOW_RUNTIME_ENABLE_INDEXER:true}
     enable-analyzer: ${LUCENTFLOW_RUNTIME_ENABLE_ANALYZER:true}
+  lease:
+    # TTL leader election for indexer/analyzer. Keep K8s worker replicas=1 until multi-replica is validated.
+    enabled: ${LUCENTFLOW_LEASE_ENABLED:true}
+    name: indexer-leader
+    ttl-seconds: ${LUCENTFLOW_LEASE_TTL_SECONDS:15}
+    renew-interval-seconds: ${LUCENTFLOW_LEASE_RENEW_INTERVAL_SECONDS:5}
   oracle:
     enabled: ${LUCENTFLOW_ORACLE_ENABLED:true}
     ttl-seconds: ${LUCENTFLOW_ORACLE_TTL_SECONDS:60}

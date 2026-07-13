@@ -1,9 +1,10 @@
 package com.lucentflow.indexer.sink;
 
 import com.lucentflow.common.entity.WhaleTransaction;
+import com.lucentflow.common.repository.WhaleTransactionRepository;
+import com.lucentflow.pipeline.WhaleTransactionSink;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.lucentflow.common.repository.WhaleTransactionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -33,7 +34,7 @@ import java.util.List;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class WhaleDatabaseSink {
+public class WhaleDatabaseSink implements WhaleTransactionSink {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     

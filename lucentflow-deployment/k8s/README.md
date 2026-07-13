@@ -9,17 +9,23 @@ Split deployment of the same fat JAR:
 
 ## HARD CONSTRAINT — single-writer worker
 
-Until lease-based leader election ships, **never run more than one worker**:
+PostgreSQL TTL lease election (`worker_leases` / `WorkerLeaseCoordinator`) now gates indexer scan and analyzer drain.
+**Deploy policy is unchanged for this release:** still run **exactly one** worker until multi-replica failover is validated.
 
 1. `lucentflow-worker.spec.replicas` **MUST** be `1`
 2. Rollout strategy **MUST** be `Recreate` (already set — do not switch to RollingUpdate)
 3. **Do not** create a Service / Ingress for the worker
 4. Apply `networkpolicy.yaml` so other pods cannot reach worker `:8080`
-5. Do not scale the worker Deployment (`kubectl scale` / HPA) without leader election
+5. Do not `kubectl scale` / HPA the worker — lease is defense-in-depth, not a green light to multi-writer yet
 
-Violating this races `sync_status` **ID=1** checkpoints and corrupts the indexer cursor.
+Violating the deploy gate still risks overlapping writers during lease expiry windows and corrupts `sync_status` **ID=1**.
 
 Worker readiness/liveness probes hit `/actuator/health` via the kubelet. That does not require a ClusterIP Service.
+
+The same rules are enforced by:
+
+1. **CI early gate** — `python3 lucentflow-deployment/k8s/assert_single_writer.py` in `.github/workflows/ci.yml`
+2. **Maven gate** — `com.lucentflow.ops.SingleWriterK8sGateTest` (runs under `mvn verify`)
 
 ## Apply
 
@@ -37,7 +43,27 @@ kubectl apply -f service.yaml
 
 Build/push the image from the repository root Dockerfile before applying.
 
-## Verify single-writer posture
+## CI / deploy gate (manifest assertions)
+
+Before merge and before apply, run the single-writer gate (also wired in `.github/workflows/ci.yml`):
+
+```bash
+python3 lucentflow-deployment/k8s/assert_single_writer.py
+# Windows: py lucentflow-deployment/k8s/assert_single_writer.py
+```
+
+The gate fails if any of these regress:
+
+| Check | Required |
+|-------|----------|
+| `lucentflow-worker` replicas | exactly `1` |
+| Rollout strategy | `Recreate` |
+| Annotations | `lucentflow.io/single-writer=true`, `max-replicas=1` |
+| Service / HPA | none targeting `component=worker` |
+| NetworkPolicy | `lucentflow-worker-deny-ingress` with `ingress: []` |
+| Spring profile | `application-worker.yml` → `enable-api: false` |
+
+## Verify single-writer posture (live cluster)
 
 ```bash
 kubectl get deploy lucentflow-worker -o jsonpath='{.spec.replicas}{"\n"}{.spec.strategy.type}{"\n"}'

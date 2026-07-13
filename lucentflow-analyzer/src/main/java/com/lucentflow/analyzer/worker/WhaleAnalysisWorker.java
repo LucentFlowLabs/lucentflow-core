@@ -2,6 +2,7 @@ package com.lucentflow.analyzer.worker;
 
 import com.lucentflow.common.constant.BaseChainConstants;
 import com.lucentflow.common.entity.WhaleTransaction;
+import com.lucentflow.common.lease.LeadershipGate;
 import com.lucentflow.common.utils.EthUnitConverter;
 import com.lucentflow.common.utils.Erc20Decoder;
 import com.lucentflow.common.utils.Sha256HexDigest;
@@ -12,9 +13,9 @@ import com.lucentflow.analyzer.service.FundingTopologyService;
 import com.lucentflow.analyzer.service.TagInferenceEngine;
 import com.lucentflow.analyzer.service.TagOracleService;
 import com.lucentflow.common.repository.WhaleTransactionRepository;
-import com.lucentflow.indexer.source.BaseBlockSource;
-import com.lucentflow.indexer.sink.WhaleDatabaseSink;
-import com.lucentflow.indexer.service.CreatorFundingTracer;
+import com.lucentflow.pipeline.BlockSourcePort;
+import com.lucentflow.pipeline.FundingTracerPort;
+import com.lucentflow.pipeline.WhaleTransactionSink;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -60,15 +61,16 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
     
     private final TransactionPipe transactionPipe;
     private final AddressLabeler addressLabeler;
-    private final WhaleDatabaseSink whaleDatabaseSink;
-    private final CreatorFundingTracer creatorFundingTracer;
+    private final WhaleTransactionSink whaleDatabaseSink;
+    private final FundingTracerPort creatorFundingTracer;
     private final com.lucentflow.analyzer.service.RiskEngine riskEngine;
-    private final BaseBlockSource blockSource;
+    private final BlockSourcePort blockSource;
     private final WhaleTransactionRepository whaleTransactionRepository;
     private final AlertService alertService;
     private final TagOracleService tagOracleService;
     private final TagInferenceEngine tagInferenceEngine;
     private final FundingTopologyService fundingTopologyService;
+    private final LeadershipGate leadershipGate;
     
     private final AtomicLong processedCount = new AtomicLong(0);
     private final AtomicLong whaleCount = new AtomicLong(0);
@@ -217,6 +219,11 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
+                    if (!leadershipGate.isLeader()) {
+                        // Follower: do not drain the pipe (leader owns ingest + analysis).
+                        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(500));
+                        continue;
+                    }
                     log.debug("Worker-{} polling for next batch...", workerId);
                     List<Transaction> rawBatch = transactionPipe.drainBatch(Math.max(1, batchSize));
 

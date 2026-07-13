@@ -8,6 +8,7 @@ import com.lucentflow.indexer.config.IndexerRpcProfile;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.common.exception.RateLimitException;
 import com.lucentflow.common.repository.SyncStatusRepository;
+import com.lucentflow.pipeline.BlockSourcePort;
 import com.lucentflow.sdk.config.RpcProviderConfig;
 import com.lucentflow.sdk.config.RpcProviderType;
 import lombok.extern.slf4j.Slf4j;
@@ -53,7 +54,7 @@ import org.springframework.beans.factory.annotation.Value;
  */
 @Slf4j
 @Component
-public class BaseBlockSource {
+public class BaseBlockSource implements BlockSourcePort {
     
     private final Web3j web3j;
     private final SyncStatusRepository syncStatusRepository;

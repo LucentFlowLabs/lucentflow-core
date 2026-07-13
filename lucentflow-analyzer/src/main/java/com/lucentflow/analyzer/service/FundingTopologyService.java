@@ -2,7 +2,7 @@ package com.lucentflow.analyzer.service;
 
 import com.lucentflow.common.entity.FundingEdge;
 import com.lucentflow.common.repository.FundingEdgeRepository;
-import com.lucentflow.indexer.service.CreatorFundingTracer;
+import com.lucentflow.pipeline.GenesisTraceOutcome;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -27,7 +27,7 @@ public class FundingTopologyService {
     @Transactional
     public void recordGenesisEdge(
             String fundedAddress,
-            CreatorFundingTracer.GenesisTraceOutcome outcome,
+            GenesisTraceOutcome outcome,
             String relatedTxHash
     ) {
         if (fundedAddress == null || fundedAddress.isBlank() || outcome == null

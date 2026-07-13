@@ -1,7 +1,7 @@
 package com.lucentflow.analyzer.service;
 
 import com.lucentflow.common.repository.FundingEdgeRepository;
-import com.lucentflow.indexer.service.CreatorFundingTracer;
+import com.lucentflow.pipeline.GenesisTraceOutcome;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -28,7 +28,7 @@ class FundingTopologyServiceTest {
 
     @Test
     void recordGenesisEdge_persistsNormalizedAddresses() {
-        var outcome = new CreatorFundingTracer.GenesisTraceOutcome(
+        var outcome = new GenesisTraceOutcome(
                 "0xABC", "CEX", true, 2);
         fundingTopologyService.recordGenesisEdge("0xDEF", outcome, "0xhash");
 

@@ -1,5 +1,6 @@
 package com.lucentflow.indexer.pipeline;
 
+import com.lucentflow.common.lease.LeadershipGate;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.control.AdaptiveBackpressureController;
 import com.lucentflow.indexer.config.IndexerRpcProfile;
@@ -53,6 +54,7 @@ public class PipelineOrchestrator implements SmartLifecycle {
     private final JdbcTemplate jdbcTemplate;
     private final RpcConcurrencyGovernor rpcConcurrencyGovernor;
     private final AdaptiveBackpressureController backpressureController;
+    private final LeadershipGate leadershipGate;
     /** Samples for approximate blocks/sec between heartbeats. */
     private final AtomicLong heartbeatSampleHead = new AtomicLong(-1L);
     private final AtomicLong heartbeatSampleNanos = new AtomicLong(0L);
@@ -99,7 +101,8 @@ public class PipelineOrchestrator implements SmartLifecycle {
                                 RpcConcurrencyGovernor rpcConcurrencyGovernor,
                                 AdaptiveBackpressureController backpressureController,
                                 IndexerRpcProfile indexerRpcProfile,
-                                RpcEndpointState rpcEndpointState) {
+                                RpcEndpointState rpcEndpointState,
+                                LeadershipGate leadershipGate) {
         this.blockSource = blockSource;
         this.whaleDatabaseSink = whaleDatabaseSink;
         this.syncStatusRepository = syncStatusRepository;
@@ -110,6 +113,7 @@ public class PipelineOrchestrator implements SmartLifecycle {
         this.indexerRpcProfile = indexerRpcProfile;
         this.rpcProviderConfig = rpcProviderConfig;
         this.rpcEndpointState = rpcEndpointState;
+        this.leadershipGate = leadershipGate;
     }
     
     /**
@@ -128,6 +132,10 @@ public class PipelineOrchestrator implements SmartLifecycle {
             return;
         }
         try {
+            if (!leadershipGate.isLeader()) {
+                log.debug("scanForNewBlocks skipped: not worker lease leader");
+                return;
+            }
             if (!backpressureController.allowScanNow()) {
                 log.debug("[BACKPRESSURE] Skipping scheduler tick (cooldown pacing)");
                 return;

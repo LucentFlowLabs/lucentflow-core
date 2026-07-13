@@ -29,6 +29,7 @@ application-dev.yml
 application-dev.yaml
 application-dev.properties
 local.properties
+docs/_private/
 *.key
 *.pem
 *.p12
