@@ -4,3 +4,4 @@ lucentflow:
   runtime:
     enable-indexer: false
     enable-analyzer: false
+    enable-api: true

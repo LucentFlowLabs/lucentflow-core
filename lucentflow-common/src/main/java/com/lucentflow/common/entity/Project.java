@@ -52,6 +52,12 @@ public class Project {
     @Column(name = "webhook_url", length = 1024)
     private String webhookUrl;
 
+    /**
+     * Per-project HMAC secret for {@code X-LucentFlow-Signature}. Null falls back to global token.
+     */
+    @Column(name = "webhook_secret", length = 256)
+    private String webhookSecret;
+
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 

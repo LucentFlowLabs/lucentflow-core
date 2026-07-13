@@ -1,5 +1,7 @@
 package com.lucentflow.api.config;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.info.Contact;
@@ -25,6 +27,7 @@ import java.util.List;
  * @author ArchLucent
  * @since 1.0
  */
+@ConditionalOnApiEnabled
 @Configuration
 public class SwaggerConfig {
     

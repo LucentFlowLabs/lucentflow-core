@@ -1,5 +1,7 @@
 package com.lucentflow.api.security;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,6 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * @author ArchLucent
  * @since 1.0
  */
+@ConditionalOnApiEnabled
 @Component
 public class PublicApiRateLimitInterceptor implements HandlerInterceptor {
 

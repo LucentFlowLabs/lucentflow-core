@@ -157,7 +157,7 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
 
     @Override
     public int getPhase() {
-        // Stop after web tier accepts no new traffic, before JVM exit.
+        // Stop after the indexer (producer) so the pipe can be drained.
         return Integer.MAX_VALUE - 100;
     }
 
@@ -165,17 +165,38 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         if (!running.getAndSet(false) && isShuttingDown.get()) {
             return;
         }
-        log.info("Graceful shutdown: stopping WhaleAnalysisWorker...");
+        log.info("Graceful shutdown: draining WhaleAnalysisWorker...");
         isShuttingDown.set(true);
+        transactionPipe.stopAccepting();
+
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (transactionPipe.hasPending() && System.nanoTime() < deadlineNanos) {
+            try {
+                Thread.sleep(100L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        if (transactionPipe.hasPending()) {
+            log.warn("WhaleAnalysisWorker drain timeout with {} pending txs remaining", transactionPipe.size());
+        } else {
+            log.info("WhaleAnalysisWorker drain complete; pipe empty");
+        }
 
         if (executor != null) {
-            executor.shutdownNow();
+            executor.shutdown();
             try {
                 if (!executor.awaitTermination(25, TimeUnit.SECONDS)) {
-                    log.warn("WhaleAnalysisWorker executor did not terminate within 25s");
+                    log.warn("WhaleAnalysisWorker executor did not terminate within 25s; forcing shutdownNow");
+                    executor.shutdownNow();
+                    if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                        log.warn("WhaleAnalysisWorker executor still running after force stop");
+                    }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                executor.shutdownNow();
                 log.warn("Interrupted while awaiting WhaleAnalysisWorker termination");
             }
         }
@@ -194,12 +215,16 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         log.info("Analyzer-Worker-{} (Virtual Thread) started.", workerId);
         
         try {
-            while (!isShuttingDown.get() && !Thread.currentThread().isInterrupted()) {
+            while (!Thread.currentThread().isInterrupted()) {
                 try {
                     log.debug("Worker-{} polling for next batch...", workerId);
                     List<Transaction> rawBatch = transactionPipe.drainBatch(Math.max(1, batchSize));
-                    
+
                     if (rawBatch.isEmpty()) {
+                        if (isShuttingDown.get()) {
+                            log.info("Analyzer-Worker-{} exiting after drain (pipe empty).", workerId);
+                            break;
+                        }
                         // Efficient waiting: pause for 100ms if no data
                         LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(100));
                         continue;

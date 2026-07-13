@@ -5,7 +5,7 @@ Split deployment of the same fat JAR:
 | Workload | Profile / flags | Role | Replicas |
 |----------|-----------------|------|----------|
 | `lucentflow-api` | `--spring.profiles.active=api` | REST + Actuator | horizontally scalable |
-| `lucentflow-worker` | `--spring.profiles.active=worker` | Indexer + analyzer | **exactly 1** |
+| `lucentflow-worker` | `--spring.profiles.active=worker` | Indexer + analyzer (`enable-api=false`; Actuator only) | **exactly 1** |
 
 ## HARD CONSTRAINT — single-writer worker
 

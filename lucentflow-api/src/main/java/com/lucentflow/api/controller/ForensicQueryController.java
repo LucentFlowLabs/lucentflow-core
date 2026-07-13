@@ -1,5 +1,7 @@
 package com.lucentflow.api.controller;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import com.lucentflow.api.dto.ForensicEventDTO;
 import com.lucentflow.api.security.ProjectContext;
 import com.lucentflow.api.service.ForensicQueryService;
@@ -35,6 +37,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * @author ArchLucent
  * @since 1.0
  */
+@ConditionalOnApiEnabled
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/forensics")

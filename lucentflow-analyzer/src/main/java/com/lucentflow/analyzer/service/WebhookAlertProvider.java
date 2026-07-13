@@ -112,8 +112,9 @@ public class WebhookAlertProvider implements AlertProvider {
                         .timeout(Duration.ofSeconds(8))
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(payload));
-                if (secretToken != null && !secretToken.isBlank()) {
-                    requestBuilder.header(SIGNATURE_HEADER, buildSignatureHeader(timestamp, payload));
+                String signingSecret = resolveSigningSecret(context);
+                if (signingSecret != null) {
+                    requestBuilder.header(SIGNATURE_HEADER, buildSignatureHeader(timestamp, payload, signingSecret));
                 }
                 HttpRequest request = requestBuilder.build();
                 try {
@@ -176,6 +177,19 @@ public class WebhookAlertProvider implements AlertProvider {
         return webhookUrl.trim();
     }
 
+    /**
+     * Prefer project webhook secret; fall back to global {@code lucentflow.webhook.secret-token}.
+     */
+    String resolveSigningSecret(AlertDispatchContext context) {
+        if (context != null && context.projectWebhookSecret() != null && !context.projectWebhookSecret().isBlank()) {
+            return context.projectWebhookSecret().trim();
+        }
+        if (secretToken == null || secretToken.isBlank()) {
+            return null;
+        }
+        return secretToken.trim();
+    }
+
     private void sleepQuietly(long millis) {
         try {
             Thread.sleep(millis);
@@ -184,10 +198,10 @@ public class WebhookAlertProvider implements AlertProvider {
         }
     }
 
-    private String buildSignatureHeader(String timestamp, String requestBody) throws Exception {
+    private String buildSignatureHeader(String timestamp, String requestBody, String secret) throws Exception {
         String signedPayload = timestamp + "." + requestBody;
         Mac mac = Mac.getInstance(HMAC_SHA256);
-        SecretKeySpec secretKeySpec = new SecretKeySpec(secretToken.trim().getBytes(StandardCharsets.UTF_8), HMAC_SHA256);
+        SecretKeySpec secretKeySpec = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_SHA256);
         mac.init(secretKeySpec);
         byte[] signatureBytes = mac.doFinal(signedPayload.getBytes(StandardCharsets.UTF_8));
         return "t=" + timestamp + ",v1=" + toHex(signatureBytes);

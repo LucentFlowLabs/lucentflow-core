@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
+import org.springframework.context.SmartLifecycle;
 /**
  * High-throughput blockchain indexing pipeline orchestrator with zero-loss guarantees.
  * 
@@ -43,7 +44,7 @@ import java.util.concurrent.locks.ReentrantLock;
 @Slf4j
 @Service
 @ConditionalOnProperty(name = "lucentflow.runtime.enable-indexer", havingValue = "true", matchIfMissing = true)
-public class PipelineOrchestrator {
+public class PipelineOrchestrator implements SmartLifecycle {
     
     private final BaseBlockSource blockSource;
     private final WhaleDatabaseSink whaleDatabaseSink;
@@ -61,6 +62,7 @@ public class PipelineOrchestrator {
     
     // Shutdown awareness flag
     private final AtomicBoolean isShuttingDown = new AtomicBoolean(false);
+    private final AtomicBoolean running = new AtomicBoolean(false);
     
     private static final int PARALLEL_PROCESSING_THRESHOLD = 3;
     private static final long CHAINSTACK_PROFESSIONAL_CHUNK_SIZE = 10L;
@@ -613,24 +615,68 @@ public class PipelineOrchestrator {
     private static final long MAX_BACKFILL_BLOCKS = 2_000L;
 
     /**
+     * Stops the producer before the analyzer drains the pipe (higher phase stops first).
+     */
+    @Override
+    public void start() {
+        running.set(true);
+        isShuttingDown.set(false);
+    }
+
+    @Override
+    public void stop() {
+        doShutdown();
+    }
+
+    @Override
+    public void stop(Runnable callback) {
+        try {
+            doShutdown();
+        } finally {
+            callback.run();
+        }
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running.get();
+    }
+
+    @Override
+    public boolean isAutoStartup() {
+        return true;
+    }
+
+    @Override
+    public int getPhase() {
+        // Stop before WhaleAnalysisWorker (MAX_VALUE - 100) so pushes halt first.
+        return Integer.MAX_VALUE;
+    }
+
+    /**
      * Cleanup method to set shutdown flag when Spring context is destroyed.
      */
     @PreDestroy
     public void shutdown() {
-        this.isShuttingDown.set(true);
-        log.info("PipelineOrchestrator: Shutdown signal received.");
-        
-        // Shutdown TransactionPipe to clear pending transactions
-        if (transactionPipe != null) {
-            transactionPipe.shutdown();
+        doShutdown();
+    }
+
+    private void doShutdown() {
+        if (!running.getAndSet(false) && isShuttingDown.get()) {
+            return;
         }
-        
-        // T10 Standard: Shutdown private Virtual Thread Executor
+        this.isShuttingDown.set(true);
+        log.info("PipelineOrchestrator: Shutdown signal received (stop accepting new work).");
+
+        if (transactionPipe != null) {
+            transactionPipe.stopAccepting();
+        }
+
         if (pipelineExecutor != null) {
             pipelineExecutor.shutdownNow();
             log.info("Pipeline executor shutdown completed.");
         }
-        
+
         log.info("Pipeline orchestrator shutting down...");
     }
 }

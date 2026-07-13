@@ -1,5 +1,7 @@
 package com.lucentflow.api.controller;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import com.lucentflow.api.service.EthPriceOracleService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -19,6 +21,7 @@ import java.util.Map;
  * @author ArchLucent
  * @since 1.0
  */
+@ConditionalOnApiEnabled
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/oracle")

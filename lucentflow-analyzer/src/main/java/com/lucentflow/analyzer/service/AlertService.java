@@ -80,7 +80,8 @@ public class AlertService {
                     hit.category(),
                     hit.address(),
                     hit.projectId(),
-                    resolveWebhookUrl(rule, hit.projectWebhookUrl())));
+                    resolveWebhookUrl(rule, hit.projectWebhookUrl()),
+                    resolveWebhookSecret(rule, hit.projectWebhookSecret())));
             dispatchedProjects.add(hit.projectId());
         }
 
@@ -97,12 +98,13 @@ public class AlertService {
                     null,
                     null,
                     rule.projectId(),
-                    rule.projectWebhookUrl()));
+                    rule.projectWebhookUrl(),
+                    rule.projectWebhookSecret()));
             dispatchedProjects.add(rule.projectId());
         }
 
         if (contexts.isEmpty() && meetsGlobalThreshold(tx)) {
-            contexts.add(new AlertDispatchContext(false, null, null, null, null, null));
+            contexts.add(new AlertDispatchContext(false, null, null, null, null, null, null));
         }
         return contexts;
     }
@@ -117,5 +119,12 @@ public class AlertService {
             return rule.projectWebhookUrl();
         }
         return hitWebhookUrl;
+    }
+
+    private String resolveWebhookSecret(AlertRuleCacheService.ProjectAlertRule rule, String hitWebhookSecret) {
+        if (rule != null && rule.projectWebhookSecret() != null && !rule.projectWebhookSecret().isBlank()) {
+            return rule.projectWebhookSecret();
+        }
+        return hitWebhookSecret;
     }
 }

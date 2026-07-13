@@ -1,5 +1,7 @@
 package com.lucentflow.api.config;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import com.lucentflow.api.security.AdminKeyInterceptor;
 import com.lucentflow.api.security.ApiKeyInterceptor;
 import com.lucentflow.api.security.PublicApiRateLimitInterceptor;
@@ -14,6 +16,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * @author ArchLucent
  * @since 1.0
  */
+@ConditionalOnApiEnabled
 @Configuration
 @RequiredArgsConstructor
 public class WebMvcConfig implements WebMvcConfigurer {

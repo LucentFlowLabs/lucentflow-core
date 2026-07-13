@@ -1,5 +1,7 @@
 package com.lucentflow.api.controller;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import com.lucentflow.analyzer.service.FundingTopologyService;
 import com.lucentflow.api.dto.FundingEdgeDTO;
 import com.lucentflow.common.entity.FundingEdge;
@@ -25,6 +27,7 @@ import java.util.Map;
  * @author ArchLucent
  * @since 1.0
  */
+@ConditionalOnApiEnabled
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/forensics/topology")

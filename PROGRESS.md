@@ -255,14 +255,15 @@ Interactive docs: Swagger UI at `/swagger-ui/index.html`.
 | P4 | ETH/USD oracle + optional Neo4j compose | ✅ Fixed 2026-07-13 |
 | P0 ops | Worker single-writer: replicas=1, Recreate, NetworkPolicy, no Service | ✅ Fixed 2026-07-13 |
 | P0 ops | Worker readiness/liveness probes (`/actuator/health`) | ✅ Fixed 2026-07-13 |
+| P1 ship | CI (`mvn verify`) + Testcontainers Flyway/forensics + per-project webhook secret + pipe drain + worker `enable-api=false` | ✅ Fixed 2026-07-13 |
 | P4+ | Neo4j Cypher sync / richer multi-asset feeds | Iterative |
-| P1 ops | CI + Testcontainers; per-project webhook secret; shared rate limit; strip Admin from worker | Next |
+| P1 ops | Shared rate limit (Redis/PG); leader election; pipeline-contract extraction | Multi-node / 60d |
 
 ---
 
 ## 10. Working Tree Snapshot
 
-Ops P0 (worker single-writer + probes) landed on `feature/v1.2.0-analytics`. Next: CI/Testcontainers and remaining T10 P1 items.
+Single-node ship hardening landed on `feature/v1.2.0-analytics`. Remaining focus: multi-node primitives (shared limits, leader election, contract extraction).
 
 ---
 

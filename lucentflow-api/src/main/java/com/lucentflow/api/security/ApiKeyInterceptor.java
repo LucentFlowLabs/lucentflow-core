@@ -1,5 +1,7 @@
 package com.lucentflow.api.security;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import com.lucentflow.api.service.ProjectApiQuotaService;
 import com.lucentflow.api.service.ProjectApiUsageService;
 import com.lucentflow.api.util.ProjectApiKeyGenerator;
@@ -20,6 +22,7 @@ import java.util.Optional;
  * @author ArchLucent
  * @since 1.0
  */
+@ConditionalOnApiEnabled
 @Component
 @RequiredArgsConstructor
 public class ApiKeyInterceptor implements HandlerInterceptor {

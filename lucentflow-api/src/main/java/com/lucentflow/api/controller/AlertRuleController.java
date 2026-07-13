@@ -1,5 +1,7 @@
 package com.lucentflow.api.controller;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import com.lucentflow.api.dto.AlertRuleDTO;
 import com.lucentflow.api.dto.AlertRuleUpsertRequest;
 import com.lucentflow.api.security.ProjectContext;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
  * @author ArchLucent
  * @since 1.0
  */
+@ConditionalOnApiEnabled
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/alert-rules")

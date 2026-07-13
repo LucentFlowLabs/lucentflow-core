@@ -3,7 +3,7 @@ package com.lucentflow.api.dto;
 import java.time.Instant;
 
 /**
- * API DTO for project metadata.
+ * API DTO for project metadata. Webhook secret is never echoed; only a configured flag.
  *
  * @author ArchLucent
  * @since 1.0
@@ -13,6 +13,7 @@ public record ProjectDTO(
         String name,
         String apiKey,
         String webhookUrl,
+        boolean webhookSecretConfigured,
         Boolean isActive,
         Instant createdAt
 ) {

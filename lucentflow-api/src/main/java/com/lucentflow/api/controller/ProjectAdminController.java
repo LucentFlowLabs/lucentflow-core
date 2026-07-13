@@ -1,5 +1,7 @@
 package com.lucentflow.api.controller;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import com.lucentflow.api.dto.ApiUsageSummaryDTO;
 import com.lucentflow.api.dto.ProjectCreateRequest;
 import com.lucentflow.api.dto.ProjectDTO;
@@ -32,6 +34,7 @@ import java.util.Optional;
  * @author ArchLucent
  * @since 1.0
  */
+@ConditionalOnApiEnabled
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/admin/projects")

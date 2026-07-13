@@ -1,5 +1,4 @@
-# Worker profile: indexer + analyzer without changing web surface (monolith jar still boots Actuator).
-# Prefer pairing with LUCENTFLOW_RUNTIME_* env overrides in K8s.
+# Worker profile: indexer + analyzer. REST / Admin MVC disabled; Actuator health kept for probes.
 # java -jar lucentflow.jar --spring.profiles.active=worker
 #
 # HARD CONSTRAINT: run exactly one worker process cluster-wide until leader election exists.
@@ -9,3 +8,10 @@ lucentflow:
   runtime:
     enable-indexer: true
     enable-analyzer: true
+    enable-api: false
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

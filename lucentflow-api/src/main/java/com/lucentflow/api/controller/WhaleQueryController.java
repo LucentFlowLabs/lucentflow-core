@@ -1,5 +1,7 @@
 package com.lucentflow.api.controller;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.common.repository.WhaleTransactionRepository;
 import com.lucentflow.common.repository.SyncStatusRepository;
@@ -38,6 +40,7 @@ import java.util.Optional;
  * @since 1.0
  */
 @Slf4j
+@ConditionalOnApiEnabled
 @RestController
 @RequestMapping("/api/v1")
 @Tag(name = "Whale Query API", description = "Public platform free tier for whale transactions and sync status (no API key; IP soft rate-limited).")
@@ -220,7 +223,7 @@ public class WhaleQueryController {
         stats.put("databaseStatus", "CONNECTED");
         stats.put("lastUpdated", System.currentTimeMillis());
         
-        // Single-row ORDER BY value_eth DESC LIMIT 1 — avoids full-table heap load.
+        // Single-row ORDER BY value_eth DESC LIMIT 1 - avoids full-table heap load.
         Optional<WhaleTransaction> maxTransaction = whaleTransactionRepository.findTopByOrderByValueEthDesc();
         
         maxTransaction.ifPresent(tx -> {

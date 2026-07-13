@@ -1,5 +1,7 @@
 package com.lucentflow.api.controller;
 
+import com.lucentflow.api.config.ConditionalOnApiEnabled;
+
 import com.lucentflow.api.dto.ApiUsageSummaryDTO;
 import com.lucentflow.api.security.ProjectContext;
 import com.lucentflow.api.service.ProjectApiUsageService;
@@ -20,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
  * @author ArchLucent
  * @since 1.0
  */
+@ConditionalOnApiEnabled
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/usage")

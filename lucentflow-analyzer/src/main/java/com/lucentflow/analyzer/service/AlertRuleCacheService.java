@@ -67,7 +67,7 @@ public class AlertRuleCacheService {
         if (cached != null) {
             return cached;
         }
-        return defaultRule(projectId, null);
+        return defaultRule(projectId, null, null);
     }
 
     public boolean shouldAlert(ProjectAlertRule rule, WhaleTransaction tx, boolean watchlistHit) {
@@ -75,7 +75,7 @@ public class AlertRuleCacheService {
             return false;
         }
         ProjectAlertRule effective = rule == null
-                ? defaultRule(null, null)
+                ? defaultRule(null, null, null)
                 : rule;
         if (!effective.enabled()) {
             return false;
@@ -97,6 +97,7 @@ public class AlertRuleCacheService {
         return new ProjectAlertRule(
                 rule.getProject().getId(),
                 rule.getProject().getWebhookUrl(),
+                rule.getProject().getWebhookSecret(),
                 rule.getMinRiskScore(),
                 Boolean.TRUE.equals(rule.getWatchlistOnly()),
                 Boolean.TRUE.equals(rule.getContractCreationOnly()),
@@ -104,10 +105,11 @@ public class AlertRuleCacheService {
         );
     }
 
-    private ProjectAlertRule defaultRule(Long projectId, String webhookUrl) {
+    private ProjectAlertRule defaultRule(Long projectId, String webhookUrl, String webhookSecret) {
         return new ProjectAlertRule(
                 projectId,
                 webhookUrl,
+                webhookSecret,
                 Math.max(0, globalRiskThreshold),
                 false,
                 false,
@@ -118,6 +120,7 @@ public class AlertRuleCacheService {
     public record ProjectAlertRule(
             Long projectId,
             String projectWebhookUrl,
+            String projectWebhookSecret,
             int minRiskScore,
             boolean watchlistOnly,
             boolean contractCreationOnly,

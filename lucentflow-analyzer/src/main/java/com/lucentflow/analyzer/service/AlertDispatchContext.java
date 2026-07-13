@@ -12,6 +12,7 @@ public record AlertDispatchContext(
         String watchlistCategory,
         String watchlistAddress,
         Long projectId,
-        String projectWebhookUrl
+        String projectWebhookUrl,
+        String projectWebhookSecret
 ) {
 }

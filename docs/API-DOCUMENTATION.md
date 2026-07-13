@@ -544,8 +544,8 @@ Require **`X-Admin-Key`** (`LUCENTFLOW_ADMIN_API_KEY`). Returns **503** when uns
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/v1/admin/projects` | GET/POST | List or create projects |
-| `/api/v1/admin/projects/{id}` | GET/PUT | Get or update project |
+| `/api/v1/admin/projects` | GET/POST | List or create projects (`webhookSecret` optional; never echoed — `webhookSecretConfigured` flag) |
+| `/api/v1/admin/projects/{id}` | GET/PUT | Get or update project (set/clear `webhookSecret` for per-project HMAC) |
 | `/api/v1/admin/projects/{id}/rotate-key` | POST | Rotate project API key |
 | `/api/v1/admin/projects/{id}/usage` | GET | Usage stats for any project |
 

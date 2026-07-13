@@ -52,7 +52,8 @@ public class WatchlistCacheService {
                         .put(projectId, new WatchlistMeta(
                                 item.getLabel(),
                                 item.getCategory(),
-                                item.getProject().getWebhookUrl()
+                                item.getProject().getWebhookUrl(),
+                                item.getProject().getWebhookSecret()
                         ));
             }
         }
@@ -100,7 +101,8 @@ public class WatchlistCacheService {
                     meta.label(),
                     meta.category(),
                     entry.getKey(),
-                    meta.projectWebhookUrl()
+                    meta.projectWebhookUrl(),
+                    meta.projectWebhookSecret()
             ));
         }
         return hits;
@@ -113,9 +115,21 @@ public class WatchlistCacheService {
         return address.trim().toLowerCase(Locale.ROOT);
     }
 
-    private record WatchlistMeta(String label, String category, String projectWebhookUrl) {
+    private record WatchlistMeta(
+            String label,
+            String category,
+            String projectWebhookUrl,
+            String projectWebhookSecret
+    ) {
     }
 
-    public record WatchlistHit(String address, String label, String category, Long projectId, String projectWebhookUrl) {
+    public record WatchlistHit(
+            String address,
+            String label,
+            String category,
+            Long projectId,
+            String projectWebhookUrl,
+            String projectWebhookSecret
+    ) {
     }
 }

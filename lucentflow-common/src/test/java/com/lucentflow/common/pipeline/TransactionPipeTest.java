@@ -2,18 +2,13 @@ package com.lucentflow.common.pipeline;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 import org.web3j.protocol.core.methods.response.Transaction;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 
-@ExtendWith(MockitoExtension.class)
 class TransactionPipeTest {
 
     private TransactionPipe transactionPipe;
@@ -80,10 +75,17 @@ class TransactionPipeTest {
     }
 
     @Test
-    void shouldHandleNullTransactionGracefully() throws InterruptedException {
-        // The current implementation returns null silently, so we verify no exception is thrown
-        transactionPipe.push(null);
-        
-        assertThat(transactionPipe.size()).isEqualTo(0);
+    void shouldStopAcceptingPushesWithoutClearingQueue() throws InterruptedException {
+        transactionPipe.push(mock(Transaction.class));
+        transactionPipe.stopAccepting();
+
+        assertThat(transactionPipe.size()).isEqualTo(1);
+        assertThat(transactionPipe.hasPending()).isTrue();
+
+        transactionPipe.push(mock(Transaction.class));
+        assertThat(transactionPipe.size()).isEqualTo(1);
+
+        assertThat(transactionPipe.drainBatch(10)).hasSize(1);
+        assertThat(transactionPipe.hasPending()).isFalse();
     }
 }

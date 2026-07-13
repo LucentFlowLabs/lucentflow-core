@@ -62,6 +62,7 @@ public class ProjectService {
                 .apiKeyHash(ProjectApiKeyGenerator.hash(plaintextKey))
                 .apiKeyPrefix(ProjectApiKeyGenerator.prefix(plaintextKey))
                 .webhookUrl(normalizeWebhookUrl(request.webhookUrl()))
+                .webhookSecret(normalizeWebhookSecret(request.webhookSecret()))
                 .isActive(Boolean.TRUE)
                 .build();
         Project saved = projectRepository.save(project);
@@ -99,6 +100,9 @@ public class ProjectService {
         }
         if (request.webhookUrl() != null) {
             existing.setWebhookUrl(normalizeWebhookUrl(request.webhookUrl()));
+        }
+        if (request.webhookSecret() != null) {
+            existing.setWebhookSecret(normalizeWebhookSecret(request.webhookSecret()));
         }
         if (request.isActive() != null) {
             existing.setIsActive(request.isActive());
@@ -142,11 +146,13 @@ public class ProjectService {
         String apiKey = plaintextApiKey != null
                 ? plaintextApiKey
                 : ProjectApiKeyGenerator.maskFromPrefix(project.getApiKeyPrefix());
+        boolean secretConfigured = project.getWebhookSecret() != null && !project.getWebhookSecret().isBlank();
         return new ProjectDTO(
                 project.getId(),
                 project.getName(),
                 apiKey,
                 project.getWebhookUrl(),
+                secretConfigured,
                 project.getIsActive(),
                 project.getCreatedAt()
         );
@@ -163,5 +169,12 @@ public class ProjectService {
             return null;
         }
         return webhookUrl.trim();
+    }
+
+    private String normalizeWebhookSecret(String webhookSecret) {
+        if (webhookSecret == null || webhookSecret.isBlank()) {
+            return null;
+        }
+        return webhookSecret.trim();
     }
 }
