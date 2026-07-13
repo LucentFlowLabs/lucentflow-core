@@ -22,5 +22,5 @@ lucentflow:
   indexer:
     scheduler-tick-ms: 86400000
   lease:
-    # Unit/IT contexts use H2 without V21 tables; disable lease DB heartbeat.
+    # Unit/IT contexts use H2 without lease tables; disable lease DB heartbeat.
     enabled: false

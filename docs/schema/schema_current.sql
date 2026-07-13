@@ -1,5 +1,8 @@
--- LucentFlow Core — consolidated initial schema (squashed former V1–V21).
--- PostgreSQL 16. Single baseline for greenfield installs (no production history).
+-- LucentFlow current-state schema snapshot.
+--
+-- Mirrors Flyway baseline: lucentflow-api/src/main/resources/db/migration/V1__init_schema.sql
+-- Prefer that file for runtime; this copy is for docs / review only.
+-- Seed / demo tenants: lucentflow-api/src/main/resources/db/demo_setup.sql
 --
 -- @author ArchLucent
 -- @since 1.2
@@ -18,7 +21,7 @@ $$ LANGUAGE plpgsql;
 -- Global chain facts
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE whale_transactions (
+CREATE TABLE IF NOT EXISTS whale_transactions (
     id                      BIGSERIAL PRIMARY KEY,
     hash                    VARCHAR(66) UNIQUE NOT NULL,
     from_address            VARCHAR(42) NOT NULL,
@@ -49,34 +52,28 @@ CREATE TABLE whale_transactions (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_wt_from_address ON whale_transactions (from_address);
-CREATE INDEX idx_wt_to_address ON whale_transactions (to_address) WHERE to_address IS NOT NULL;
-CREATE INDEX idx_wt_block_number ON whale_transactions (block_number);
-CREATE INDEX idx_wt_timestamp ON whale_transactions (timestamp);
-CREATE INDEX idx_wt_value_eth ON whale_transactions (value_eth);
-CREATE INDEX idx_wt_hash ON whale_transactions (hash);
-CREATE INDEX idx_wt_contract_creation
+CREATE INDEX IF NOT EXISTS idx_wt_from_address ON whale_transactions (from_address);
+CREATE INDEX IF NOT EXISTS idx_wt_to_address ON whale_transactions (to_address) WHERE to_address IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_wt_block_number ON whale_transactions (block_number);
+CREATE INDEX IF NOT EXISTS idx_wt_timestamp ON whale_transactions (timestamp);
+CREATE INDEX IF NOT EXISTS idx_wt_value_eth ON whale_transactions (value_eth);
+CREATE INDEX IF NOT EXISTS idx_wt_hash ON whale_transactions (hash);
+CREATE INDEX IF NOT EXISTS idx_wt_contract_creation
     ON whale_transactions (is_contract_creation) WHERE is_contract_creation = TRUE;
-CREATE INDEX idx_wt_funding_source_address ON whale_transactions (funding_source_address);
-CREATE INDEX idx_wt_rug_risk_level ON whale_transactions (rug_risk_level);
-CREATE INDEX idx_wt_serial_deployer_from_time
+CREATE INDEX IF NOT EXISTS idx_wt_funding_source_address ON whale_transactions (funding_source_address);
+CREATE INDEX IF NOT EXISTS idx_wt_rug_risk_level ON whale_transactions (rug_risk_level);
+CREATE INDEX IF NOT EXISTS idx_wt_serial_deployer_from_time
     ON whale_transactions (from_address, timestamp DESC)
     WHERE is_contract_creation = TRUE;
-CREATE INDEX idx_wt_bytecode_hash ON whale_transactions (bytecode_hash);
-CREATE INDEX idx_wt_token_address ON whale_transactions (token_address);
+CREATE INDEX IF NOT EXISTS idx_wt_bytecode_hash ON whale_transactions (bytecode_hash);
+CREATE INDEX IF NOT EXISTS idx_wt_token_address ON whale_transactions (token_address);
 
+DROP TRIGGER IF EXISTS update_whale_transactions_updated_at ON whale_transactions;
 CREATE TRIGGER update_whale_transactions_updated_at
     BEFORE UPDATE ON whale_transactions
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-COMMENT ON TABLE whale_transactions IS 'Large Base L2 transactions with risk / anti-rug enrichment';
-COMMENT ON COLUMN whale_transactions.to_address IS 'NULL for contract deployments';
-COMMENT ON COLUMN whale_transactions.value_eth IS 'ETH amount with 18 decimal precision';
-COMMENT ON COLUMN whale_transactions.bytecode_hash IS 'SHA-256 hex of contract creation input data';
-COMMENT ON COLUMN whale_transactions.token_symbol IS 'Core ERC-20 symbol when transaction_type is ERC20_TRANSFER';
-COMMENT ON COLUMN whale_transactions.token_address IS 'ERC-20 contract address';
-
-CREATE TABLE sync_status (
+CREATE TABLE IF NOT EXISTS sync_status (
     id                  BIGSERIAL PRIMARY KEY,
     last_scanned_block  BIGINT NOT NULL,
     sync_status         VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
@@ -88,22 +85,15 @@ CREATE TABLE sync_status (
     CONSTRAINT chk_sync_status_singleton CHECK (id = 1)
 );
 
-CREATE INDEX idx_ss_last_scanned_block ON sync_status (last_scanned_block);
-CREATE INDEX idx_ss_sync_status ON sync_status (sync_status);
+CREATE INDEX IF NOT EXISTS idx_ss_last_scanned_block ON sync_status (last_scanned_block);
+CREATE INDEX IF NOT EXISTS idx_ss_sync_status ON sync_status (sync_status);
 
+DROP TRIGGER IF EXISTS update_sync_status_updated_at ON sync_status;
 CREATE TRIGGER update_sync_status_updated_at
     BEFORE UPDATE ON sync_status
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-COMMENT ON TABLE sync_status IS 'Indexer checkpoint — ID=1 Protocol singleton';
-COMMENT ON COLUMN sync_status.chain_head_block IS 'Latest chain tip at last heartbeat';
-COMMENT ON COLUMN sync_status.block_lag IS 'chain_head_block - last_scanned_block';
-COMMENT ON COLUMN sync_status.blocks_per_second IS 'Approximate indexing throughput since previous heartbeat';
-
-INSERT INTO sync_status (id, last_scanned_block, sync_status)
-VALUES (1, 0, 'ACTIVE');
-
-CREATE TABLE entity_tags (
+CREATE TABLE IF NOT EXISTS entity_tags (
     address                 VARCHAR(42) PRIMARY KEY,
     tag_name                VARCHAR(100) NOT NULL,
     category                VARCHAR(32) NOT NULL,
@@ -111,17 +101,9 @@ CREATE TABLE entity_tags (
     metadata                TEXT NOT NULL DEFAULT '{}'
 );
 
-CREATE INDEX idx_entity_tags_category ON entity_tags (category);
+CREATE INDEX IF NOT EXISTS idx_entity_tags_category ON entity_tags (category);
 
-COMMENT ON TABLE entity_tags IS 'Canonical address label oracle (global)';
-
-INSERT INTO entity_tags (address, tag_name, category, risk_score_modifier, metadata) VALUES
-    (LOWER('0x49ff46ed6b6a0a8ceaecb75429ba6e38c9ac123d'), 'LucentFlow Founder', 'SYSTEM', 0, '{}'),
-    (LOWER('0x4200000000000000000000000000000000000010'), 'Base: L2 Standard Bridge', 'BRIDGE', 0, '{}'),
-    (LOWER('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'), 'USDC: Proxy Contract', 'DEFI', 0, '{}'),
-    (LOWER('0x94017f291504d6Ac5aB78698A44d673752e50529'), 'Aerodrome: Router', 'DEFI', 0, '{}');
-
-CREATE TABLE funding_edges (
+CREATE TABLE IF NOT EXISTS funding_edges (
     id                  BIGSERIAL PRIMARY KEY,
     funder_address      VARCHAR(42) NOT NULL,
     funded_address      VARCHAR(42) NOT NULL,
@@ -132,18 +114,12 @@ CREATE TABLE funding_edges (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_funding_edges_funded ON funding_edges (funded_address);
-CREATE INDEX idx_funding_edges_funder ON funding_edges (funder_address);
-CREATE UNIQUE INDEX uk_funding_edges_pair_hop
+CREATE INDEX IF NOT EXISTS idx_funding_edges_funded ON funding_edges (funded_address);
+CREATE INDEX IF NOT EXISTS idx_funding_edges_funder ON funding_edges (funder_address);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_funding_edges_pair_hop
     ON funding_edges (funder_address, funded_address, hop_layer);
 
-COMMENT ON TABLE funding_edges IS 'Genesis Trace funding graph edges (global)';
-
--- ---------------------------------------------------------------------------
--- Tenant configuration (B2B)
--- ---------------------------------------------------------------------------
-
-CREATE TABLE projects (
+CREATE TABLE IF NOT EXISTS projects (
     id              BIGSERIAL PRIMARY KEY,
     name            VARCHAR(120) NOT NULL,
     api_key_hash    VARCHAR(64) NOT NULL,
@@ -154,13 +130,9 @@ CREATE TABLE projects (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX uk_projects_api_key_hash ON projects (api_key_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_projects_api_key_hash ON projects (api_key_hash);
 
-COMMENT ON TABLE projects IS 'B2B project / tenant root';
-COMMENT ON COLUMN projects.api_key_hash IS 'SHA-256 hex of API key; plaintext never at rest';
-COMMENT ON COLUMN projects.webhook_secret IS 'Per-project HMAC secret (plaintext; NULL falls back to global token)';
-
-CREATE TABLE watchlist (
+CREATE TABLE IF NOT EXISTS watchlist (
     id          BIGSERIAL PRIMARY KEY,
     address     VARCHAR(42) NOT NULL,
     label       VARCHAR(120) NOT NULL,
@@ -169,14 +141,12 @@ CREATE TABLE watchlist (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX uk_watchlist_project_address ON watchlist (project_id, address);
-CREATE INDEX idx_watchlist_address ON watchlist (address);
-CREATE INDEX idx_watchlist_category ON watchlist (category);
-CREATE INDEX idx_watchlist_project_id ON watchlist (project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_watchlist_project_address ON watchlist (project_id, address);
+CREATE INDEX IF NOT EXISTS idx_watchlist_address ON watchlist (address);
+CREATE INDEX IF NOT EXISTS idx_watchlist_category ON watchlist (category);
+CREATE INDEX IF NOT EXISTS idx_watchlist_project_id ON watchlist (project_id);
 
-COMMENT ON TABLE watchlist IS 'Per-project monitored addresses (tenant isolation anchor)';
-
-CREATE TABLE alert_rules (
+CREATE TABLE IF NOT EXISTS alert_rules (
     id                      BIGSERIAL PRIMARY KEY,
     project_id              BIGINT NOT NULL UNIQUE REFERENCES projects (id),
     min_risk_score          INT NOT NULL DEFAULT 70,
@@ -187,11 +157,9 @@ CREATE TABLE alert_rules (
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_alert_rules_project_id ON alert_rules (project_id);
+CREATE INDEX IF NOT EXISTS idx_alert_rules_project_id ON alert_rules (project_id);
 
-COMMENT ON TABLE alert_rules IS 'Per-project alert rule (1:1 with projects)';
-
-CREATE TABLE project_api_usage (
+CREATE TABLE IF NOT EXISTS project_api_usage (
     id              BIGSERIAL PRIMARY KEY,
     project_id      BIGINT NOT NULL REFERENCES projects (id),
     usage_date      DATE NOT NULL,
@@ -200,29 +168,19 @@ CREATE TABLE project_api_usage (
     CONSTRAINT uk_project_api_usage_project_date UNIQUE (project_id, usage_date)
 );
 
-CREATE INDEX idx_project_api_usage_project_date
+CREATE INDEX IF NOT EXISTS idx_project_api_usage_project_date
     ON project_api_usage (project_id, usage_date DESC);
 
-COMMENT ON TABLE project_api_usage IS 'Per-project daily API request counters';
-
--- ---------------------------------------------------------------------------
--- Cluster coordination
--- ---------------------------------------------------------------------------
-
-CREATE TABLE worker_leases (
+CREATE TABLE IF NOT EXISTS worker_leases (
     lease_name  VARCHAR(64) PRIMARY KEY,
     holder_id   VARCHAR(128) NOT NULL,
     lease_until TIMESTAMPTZ NOT NULL,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-COMMENT ON TABLE worker_leases IS 'TTL leader election for indexer/analyzer (sync_status ID=1 writer)';
-
-CREATE TABLE api_rate_limit_buckets (
+CREATE TABLE IF NOT EXISTS api_rate_limit_buckets (
     bucket_key    VARCHAR(256) NOT NULL,
     epoch_minute  BIGINT NOT NULL,
     request_count BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (bucket_key, epoch_minute)
 );
-
-COMMENT ON TABLE api_rate_limit_buckets IS 'Cluster-shared per-minute API rate limit counters';

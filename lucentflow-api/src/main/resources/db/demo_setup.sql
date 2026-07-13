@@ -1,6 +1,6 @@
 -- LucentFlow Demo Bootstrap (v1.2.0)
 -- LOCAL / DEMO ONLY — do NOT run against production databases.
--- The Flyway V13 bootstrap key (default-dev-key) is revoked by V17; API keys are hashed at rest (V18).
+-- Schema baseline V1 stores only hashed API keys (api_key_hash); no bootstrap plaintext key.
 -- Clients still send plaintext X-Project-Key: demo-project-key-2026
 -- Usage:
 --   psql -h <host> -U <user> -d <db> -f src/main/resources/db/demo_setup.sql

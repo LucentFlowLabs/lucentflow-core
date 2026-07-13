@@ -9,13 +9,13 @@
 
 ## 1. Executive Verdict
 
-LucentFlow 已从 Base L2 **链上哨兵**演进为具备 **B2B 多租户产品面** 的主权取证 OS。核心链路——**RPC 拉块 → TransactionPipe → RiskEngine → PostgreSQL → REST/Webhook**——在单体 Fat JAR 中打通；v1.2.0 的 Project / Watchlist / AlertRule / Usage 能力在代码与 Flyway（V13–V16）上基本对齐。
+LucentFlow 已从 Base L2 **链上哨兵**演进为具备 **B2B 多租户产品面** 的主权取证 OS。核心链路——**RPC 拉块 → TransactionPipe → RiskEngine → PostgreSQL → REST/Webhook**——在单体 Fat JAR 中打通；v1.2.0 的 Project / Watchlist / AlertRule / Usage 能力在代码与 Flyway **V1** 基线上对齐。
 
 当前定位：**可用的 SaaS MVP（多项目隔离 + 告警 + 取证查询）**，尚非完整 enterprise B2B（缺配额 enforcement、RBAC、Key at-rest 硬化、充分自动化测试）。
 
 | 维度 | 评级 | 说明 |
 |------|------|------|
-| 索引与 checkpoint | ★★★★★ | ID=1 Protocol + V16 数据库强制单例 |
+| 索引与 checkpoint | ★★★★★ | ID=1 Protocol + DB `CHECK (id = 1)` |
 | 风险分析 / Anti-Rug | ★★★★☆ | RiskEngine + Genesis Trace 成熟；事件驱动路径半废弃 |
 | B2B 多租户 API | ★★★★☆ | CRUD / Key / 规则 / 计量已 wired；隔离边界有产品债 |
 | 告警投递 | ★★★☆☆ | HMAC Webhook + Telegram；项目级 webhook 存在全局 URL gate |
@@ -62,7 +62,7 @@ flowchart LR
 
 **Hard protocols (enforced in code + schema):**
 
-- **ID=1 Protocol** — all sync read/write targets `sync_status.id = 1`; V16 adds `CHECK (id = 1)`.
+- **ID=1 Protocol** — all sync read/write targets `sync_status.id = 1` (`CHECK (id = 1)` in Flyway V1).
 - **Zero-loss pipe** — bounded `TransactionPipe` (capacity 5000); producer blocks, does not drop.
 - **Native UPSERT** — whale persistence via `ON CONFLICT` for idempotent ingest.
 - **Virtual Threads** — indexer parallelism, analysis workers, webhook, usage metering.
@@ -86,7 +86,7 @@ flowchart LR
 - [x] RpcConcurrencyGovernor + 429 soft-fail (no backup failover on rate limit)
 - [x] Genesis Trace / Anti-Rug 2.0 signals
 - [x] ERC-20 outpost fields, bytecode hash, execution_status
-- [x] Entity tags / Tag Oracle seed (V10)
+- [x] Entity tags / Tag Oracle seed (in Flyway V1)
 - [x] Telegram alerting baseline
 
 ### Phase 3 — B2B Productization (v1.2) ✅ Core / ⚠️ Hardening
@@ -94,16 +94,16 @@ flowchart LR
 | Capability | Status | Evidence |
 |------------|--------|----------|
 | Forensic query + JSON/CSV export | ✅ Done | `/api/v1/forensics/**`, JPA Specifications |
-| Project-scoped watchlist | ✅ Done | V13 + `WatchlistCacheService` |
-| Per-project alert rules | ✅ Done | V14 + `AlertRuleController` / `AlertRuleCacheService` |
-| HMAC project webhooks | ⚠️ Wired w/ bug | See §5.1 |
+| Project-scoped watchlist | ✅ Done | `(project_id, address)` + `WatchlistCacheService` |
+| Per-project alert rules | ✅ Done | `AlertRuleController` / `AlertRuleCacheService` |
+| HMAC project webhooks | ✅ Done | Project URL + optional `webhook_secret`; see §5.1 |
 | Admin project CRUD + key rotate | ✅ Done | `/api/v1/admin/projects`, `X-Admin-Key` |
-| Daily API usage metering | ✅ Done | V15 + interceptor 2xx-only counter |
-| sync_status singleton | ✅ Done | V16 + poller deletion |
-| Docs / CHANGELOG / demo_setup | ✅ Mostly synced | README claims v1.2.0-STABLE |
+| Daily API usage metering | ✅ Done | `project_api_usage` + interceptor 2xx-only counter |
+| sync_status singleton | ✅ Done | `CHECK (id = 1)` + poller deletion |
+| Docs / CHANGELOG / demo_setup | ✅ Synced | Flyway V1 baseline; see `docs/schema/SCHEMA_CURRENT.md` |
 | Quota / rate-limit enforcement | ✅ Done | Daily + per-minute; `0` disables |
 | B2B unit tests (interceptors/quota/keys) | ✅ Done | Analyzer + API focused tests |
-| API key at-rest hashing | ✅ Done | V18 SHA-256 |
+| API key at-rest hashing | ✅ Done | SHA-256 `api_key_hash` + prefix |
 | Public `/whales` product decision | ✅ Done | Free tier + IP soft limit |
 
 ### Phase 4 — Roadmap (from `docs/ROADMAP_v1.1.0.md`) 🚀 Next
@@ -125,7 +125,7 @@ flowchart LR
 | RiskEngine + funding / rug signals | ● | | |
 | ERC-20 + bytecode clone signals | ● | | |
 | Entity tags | ● | | |
-| Projects + API keys | ● | | Hashed at rest (V18) |
+| Projects + API keys | ● | | Hashed at rest (`api_key_hash`) |
 | Watchlist isolation | ● | | |
 | Alert rules + cache | ● | | |
 | Webhook HMAC fan-out | ● | | |
@@ -149,7 +149,7 @@ flowchart LR
    Empty project watchlist now yields an empty forensic result set via `addressInSet([])` disjunction (tenant isolation).
 
 3. **~~Bootstrap keys in schema / demo~~** ✅ Hardened (2026-07-13)  
-   Flyway **V17** deactivates and rotates the well-known V13 `default-dev-key`. `demo_setup.sql` is documented as local/demo only.
+   Flyway **V1** baseline stores only hashed API keys (no well-known plaintext bootstrap key). `demo_setup.sql` is local/demo only.
 
 ### 5.2 Medium priority
 
@@ -169,7 +169,7 @@ flowchart LR
    `ProjectApiQuotaService` enforces daily quota + per-minute rate limit (HTTP 429).
 
 9. **~~API key storage~~** ✅ Fixed (2026-07-13)  
-   V18 persists `api_key_hash` + `api_key_prefix`; plaintext only on create/rotate.
+   Schema persists `api_key_hash` + `api_key_prefix`; plaintext only on create/rotate.
 
 10. **~~Config dualism~~** ✅ Fixed (2026-07-13)  
     Indexer `application.yml` now uses `ddl-auto: none` and `flyway.enabled: false`; schema owned by `lucentflow-api` Flyway.
@@ -186,27 +186,13 @@ flowchart LR
 
 ---
 
-## 6. Database Migrations (V1–V18)
+## 6. Database Migrations (V1 baseline)
+
+Former incremental V1–V21 history was **squashed** into a single greenfield baseline (no production DB). See [`docs/schema/SCHEMA_CURRENT.md`](docs/schema/SCHEMA_CURRENT.md).
 
 | Ver | Purpose |
 |-----|---------|
-| V1 | Initial `whale_transactions` + `sync_status` |
-| V2 | Rug / funding analysis columns |
-| V3 | `risk_score` / `risk_reasons` |
-| V5 | `execution_status` integrity audit |
-| V6 | Serial deployer query index |
-| V7 | `bytecode_hash` |
-| V8 | Token symbol / address |
-| V9 | Sync metrics (`chain_head_block`, `block_lag`, `blocks_per_second`) |
-| V10 | `entity_tags` + seed labels |
-| V11 | `risk_reasons` → JSONB |
-| V12 | Global watchlist |
-| V13 | **`projects` multi-tenant**; watchlist `(project_id, address)` |
-| V14 | **`alert_rules`** (1:1 per project) |
-| V15 | **`project_api_usage`** daily counters |
-| V16 | **`sync_status` singleton** `CHECK (id = 1)` |
-| V17 | **Revoke** well-known V13 `default-dev-key` (deactivate + rotate) |
-| V18 | **Hash** project API keys (`api_key_hash` + `api_key_prefix`) |
+| V1 | Full schema: whale, sync (ID=1), entity_tags, funding_edges, projects (hashed keys), watchlist, alert_rules, usage, worker_leases, api_rate_limit_buckets |
 
 ---
 

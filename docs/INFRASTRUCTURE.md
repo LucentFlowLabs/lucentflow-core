@@ -363,17 +363,17 @@ curl http://localhost:8080/actuator/health
 
 Manifests live under `lucentflow-deployment/k8s/`.
 
-**HARD CONSTRAINT — single-writer worker:** Until lease-based leader election exists, run **exactly one** `lucentflow-worker` replica. Multiple writers race `sync_status` **ID=1** and corrupt the indexer checkpoint.
+**HARD CONSTRAINT — single-writer worker (deploy policy):** PostgreSQL TTL lease election (`worker_leases` / `WorkerLeaseCoordinator`, default `lucentflow.lease.enabled=true`) already gates indexer scan and analyzer drain. **Deploy policy is unchanged for this release:** run **exactly one** `lucentflow-worker` replica until multi-replica failover is validated. Lease is defense-in-depth, not a green light to scale workers.
 
 | Rule | Enforcement |
 |------|-------------|
 | `replicas: 1` | Deployment + annotations `lucentflow.io/max-replicas: "1"` |
-| `strategy: Recreate` | Avoids two writers during rollouts |
+| `strategy: Recreate` | Avoids two writers during rollouts / lease expiry windows |
 | No worker Service | Only `lucentflow-api` has a ClusterIP |
 | Ingress deny | `networkpolicy.yaml` blocks pod-to-pod access to worker |
 | Probes | Worker readiness/liveness → `/actuator/health` (kubelet; no Service required) |
 
-Do **not** `kubectl scale` the worker or attach an HPA until leader election ships. See `lucentflow-deployment/k8s/README.md`.
+Do **not** `kubectl scale` the worker or attach an HPA until multi-replica failover is explicitly validated. See `lucentflow-deployment/k8s/README.md`.
 
 ### Service Management
 

@@ -243,9 +243,9 @@ curl "http://localhost:8080/api/v1/whales/stats"
 
 There is **no** dedicated REST controller for the Tag Oracle in **v1.1.0**. Labels are **sovereign, local-first** data:
 
-- **Storage:** `entity_tags` (see Flyway migrations) holds canonical **address → label** rows used by **`TagOracleService`** in the analyzer.
+- **Storage:** `entity_tags` (Flyway **V1** baseline + operator imports) holds canonical **address → label** rows used by **`TagOracleService`** in the analyzer.
 - **API surfacing:** Resolved tags appear on whale payloads as **`fromAddressTag`**, **`toAddressTag`**, **`addressTag`**, and related fields on **`GET /api/v1/whales`** when the pipeline has enriched the row.
-- **Scale:** Full-scale deployments often maintain **hundreds** of institutional labels (700+ is typical for curated forensics datasets). **Row count is deployment-dependent** (Flyway seeds + operator imports); do not assume a fixed catalog size from the API alone.
+- **Scale:** V1 seeds a small curated set (a handful of Base/system labels). Full-scale deployments may import **hundreds** of institutional labels; **row count is deployment-dependent** — do not assume a fixed catalog size from the API alone.
 - **Ad-hoc inspection:** Operators may query PostgreSQL directly, e.g. `SELECT address, tag_name, category FROM entity_tags ORDER BY tag_name LIMIT 50;`, or attach Metabase for governance workflows.
 
 ---

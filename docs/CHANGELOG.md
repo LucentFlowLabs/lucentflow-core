@@ -14,38 +14,34 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 - **Watchlist** — Project-scoped CRUD with in-memory O(1) cache for pipeline evaluation.
 - **Alert rules (Run-1)** — Per-project thresholds; watchlist hits bypass minimum score; `AlertRuleCacheService` hot-reload.
 - **Project admin (Run-2)** — Admin CRUD at `/api/v1/admin/projects`, API key rotation, daily usage metering in `project_api_usage`.
-- **Risk scoring** — Normalized 0–100 profile with JSONB dimension reasons (`V11` migration).
+- **Risk scoring** — Normalized 0–100 profile with JSONB dimension reasons.
 
 ### Technical debt (Run-3)
 
 - **`TransactionPipe.backpressureEvents`** — Counter now increments on queue stall; unit test added.
-- **`sync_status` ID=1 protocol** — `V16` consolidates stray rows and adds `CHECK (id = 1)`; deprecated `BaseBlockPoller` removed.
-- **`SyncStatus` timestamps** — Migrated from `LocalDateTime` to `Instant`; V9 metrics exposed on `/api/v1/sync-status`; `sync_status` column mapped.
+- **`sync_status` ID=1 protocol** — Singleton checkpoint with `CHECK (id = 1)`; deprecated `BaseBlockPoller` removed.
+- **`SyncStatus` timestamps** — Migrated from `LocalDateTime` to `Instant`; sync metrics exposed on `/api/v1/sync-status`; `sync_status` column mapped.
 - **Swagger** — Removed global project-key requirement from public whale/sync endpoints; license aligned to Apache 2.0.
 - **Maven `${revision}`** — Bumped to `1.2.0-STABLE` to match banner and docs.
 - **Forensics empty watchlist** — Empty project watchlist returns **empty** forensic results (tenant isolation; was full-dataset onboarding in earlier 1.2 drafts).
 - **Inactive projects** — Alert/watchlist pipeline caches skip `is_active=false` projects.
-- **Bootstrap key revoke** — `V17` deactivates and rotates the well-known V13 `default-dev-key`.
-- **API key at-rest hashing** — `V18` stores SHA-256 `api_key_hash` + display prefix; plaintext only on create/rotate.
+- **Bootstrap key revoke** — No well-known plaintext bootstrap key in the schema baseline.
+- **API key at-rest hashing** — SHA-256 `api_key_hash` + display prefix; plaintext only on create/rotate.
 - **Quota / rate limits** — Project daily quota + per-minute limit; public whales/sync IP soft throttle (configurable; `0` disables).
 - **Public `/whales` decision** — Remain unauthenticated platform free tier; paid surfaces stay project-keyed.
 - **P3 tech debt** — Removed unused `WhaleDetectedEvent` path; moved JPA repositories to `lucentflow-common`; indexer `ddl-auto: none` + Flyway disabled; `WhaleAnalysisWorker` uses `SmartLifecycle` for graceful shutdown.
 - **Phase 4 foundation** — Discord alerts; historical backfill admin API; Postgres `funding_edges` topology + forensic query; ETH/USD oracle; runtime indexer/analyzer split flags; K8s api/worker manifests; optional Neo4j compose profile.
 - **K8s worker single-writer (ops P0)** — `replicas: 1`, `strategy: Recreate`, deny-ingress NetworkPolicy, no worker Service; readiness/liveness probes on `/actuator/health`.
-- **Single-node ship hardening** — GitHub Actions `mvn verify`; Testcontainers Flyway V1–V20 + forensic empty-watchlist IT; per-project `webhook_secret` (V20) with global HMAC fallback; TransactionPipe drain-before-clear shutdown; worker `enable-api=false` strips REST/Admin (Actuator kept).
+- **Single-node ship hardening** — GitHub Actions `mvn verify`; Testcontainers Flyway **V1** baseline + forensic empty-watchlist IT; per-project `webhook_secret` with global HMAC fallback; TransactionPipe drain-before-clear shutdown; worker `enable-api=false` strips REST/Admin (Actuator kept).
 - **API usage metering** — Counts only HTTP 2xx responses.
 - **`BasescanConfigTest`** — Fixed H2 test profile with mocked indexer/analyzer workers.
+- **Flyway squash** — Former incremental V1–V21 history collapsed into a single greenfield `V1__init_schema.sql` (no production DB to migrate).
 
 ### Database migrations
 
-- `V13` projects + watchlist scope
-- `V14` alert_rules
-- `V15` project_api_usage
-- `V16` sync_status singleton enforcement
-- `V17` revoke bootstrap `default-dev-key`
-- `V18` hash project API keys at rest
-- `V19` funding_edges (Genesis Trace 3.0 topology lite)
-- `V20` projects.webhook_secret (per-project HMAC)
+Design: [`docs/schema/SCHEMA_CURRENT.md`](schema/SCHEMA_CURRENT.md) · mirror DDL: [`schema_current.sql`](schema/schema_current.sql).
+
+- `V1__init_schema.sql` — consolidated baseline (whale, sync, tags, funding_edges, projects, watchlist, alert_rules, usage, leases, rate buckets)
 
 ---
 
