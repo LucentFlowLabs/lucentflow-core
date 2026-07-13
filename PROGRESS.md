@@ -253,13 +253,16 @@ Interactive docs: Swagger UI at `/swagger-ui/index.html`.
 | P4 | Genesis Trace 3.0 topology (`funding_edges`) | ✅ Fixed 2026-07-13 |
 | P4 | Runtime split + K8s api/worker manifests | ✅ Fixed 2026-07-13 |
 | P4 | ETH/USD oracle + optional Neo4j compose | ✅ Fixed 2026-07-13 |
+| P0 ops | Worker single-writer: replicas=1, Recreate, NetworkPolicy, no Service | ✅ Fixed 2026-07-13 |
+| P0 ops | Worker readiness/liveness probes (`/actuator/health`) | ✅ Fixed 2026-07-13 |
 | P4+ | Neo4j Cypher sync / richer multi-asset feeds | Iterative |
+| P1 ops | CI + Testcontainers; per-project webhook secret; shared rate limit; strip Admin from worker | Next |
 
 ---
 
 ## 10. Working Tree Snapshot
 
-P0–P2 hardening landed on `feature/v1.2.0-analytics` (see git log). Remaining focus: P3 tech debt and Phase 4 roadmap.
+Ops P0 (worker single-writer + probes) landed on `feature/v1.2.0-analytics`. Next: CI/Testcontainers and remaining T10 P1 items.
 
 ---
 
@@ -269,7 +272,7 @@ P0–P2 hardening landed on `feature/v1.2.0-analytics` (see git log). Remaining 
 
 **Scheme assessment:** Multi-tenant isolation via hashed Project Key + watchlist-scoped forensics + quota enforcement is a viable SaaS MVP. Remaining gaps are mainly **architectural debt** (event path, module coupling) and **Phase 4 graph forensics / HA**.
 
-**Overall progress:** Phase 1–3 complete; Phase 4 foundation landed (Discord, backfill, topology, K8s split, oracle); Neo4j Cypher sync and broader price feeds remain iterative.
+**Overall progress:** Phase 1–3 complete; Phase 4 foundation landed (Discord, backfill, topology, K8s split, oracle); ops P0 single-writer + worker probes hardened. Neo4j Cypher sync and broader price feeds remain iterative.
 
 ---
 

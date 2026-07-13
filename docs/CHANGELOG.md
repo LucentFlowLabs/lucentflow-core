@@ -31,6 +31,7 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 - **Public `/whales` decision** — Remain unauthenticated platform free tier; paid surfaces stay project-keyed.
 - **P3 tech debt** — Removed unused `WhaleDetectedEvent` path; moved JPA repositories to `lucentflow-common`; indexer `ddl-auto: none` + Flyway disabled; `WhaleAnalysisWorker` uses `SmartLifecycle` for graceful shutdown.
 - **Phase 4 foundation** — Discord alerts; historical backfill admin API; Postgres `funding_edges` topology + forensic query; ETH/USD oracle; runtime indexer/analyzer split flags; K8s api/worker manifests; optional Neo4j compose profile.
+- **K8s worker single-writer (ops P0)** — `replicas: 1`, `strategy: Recreate`, deny-ingress NetworkPolicy, no worker Service; readiness/liveness probes on `/actuator/health`.
 - **API usage metering** — Counts only HTTP 2xx responses.
 - **`BasescanConfigTest`** — Fixed H2 test profile with mocked indexer/analyzer workers.
 

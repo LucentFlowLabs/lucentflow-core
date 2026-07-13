@@ -1,0 +1,41 @@
+# Deny all pod-to-pod ingress to the worker.
+# HARD CONSTRAINT: worker must remain a single-writer process (sync_status ID=1).
+# Do not expose worker via Service. Probes use the kubelet path and do not require a Service.
+#
+# @author ArchLucent
+# @since 1.2
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lucentflow-worker-deny-ingress
+  labels:
+    app: lucentflow
+    component: worker
+spec:
+  podSelector:
+    matchLabels:
+      app: lucentflow
+      component: worker
+  policyTypes:
+    - Ingress
+  ingress: []
+---
+# API remains reachable only on the declared Service port from in-cluster clients.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lucentflow-api-allow-http
+  labels:
+    app: lucentflow
+    component: api
+spec:
+  podSelector:
+    matchLabels:
+      app: lucentflow
+      component: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080

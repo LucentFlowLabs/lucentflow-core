@@ -1,3 +1,14 @@
+# LucentFlow API + Worker Deployments
+#
+# HARD CONSTRAINT — single-writer worker:
+#   - lucentflow-worker.replicas MUST remain 1
+#   - strategy MUST be Recreate (never RollingUpdate with maxSurge > 0)
+#   - do NOT create a ClusterIP/LoadBalancer Service for the worker
+#   - apply networkpolicy.yaml so worker:8080 is not reachable from other pods
+# Scaling workers without leader election will double-write sync_status (ID=1) and corrupt checkpoints.
+#
+# @author ArchLucent
+# @since 1.2
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,7 +34,8 @@ spec:
           imagePullPolicy: IfNotPresent
           args: ["--spring.profiles.active=api"]
           ports:
-            - containerPort: 8080
+            - name: http
+              containerPort: 8080
           envFrom:
             - secretRef:
                 name: lucentflow-secrets
@@ -37,15 +49,17 @@ spec:
           readinessProbe:
             httpGet:
               path: /actuator/health
-              port: 8080
+              port: http
             initialDelaySeconds: 30
             periodSeconds: 10
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /actuator/health
-              port: 8080
+              port: http
             initialDelaySeconds: 60
             periodSeconds: 20
+            failureThreshold: 3
           resources:
             requests:
               cpu: "250m"
@@ -61,8 +75,15 @@ metadata:
   labels:
     app: lucentflow
     component: worker
+  annotations:
+    lucentflow.io/single-writer: "true"
+    lucentflow.io/max-replicas: "1"
 spec:
+  # MUST stay 1 until lease-based leader election exists.
   replicas: 1
+  # Recreate avoids two writers during rollouts (RollingUpdate maxSurge would race on sync_status).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: lucentflow
@@ -72,12 +93,18 @@ spec:
       labels:
         app: lucentflow
         component: worker
+      annotations:
+        lucentflow.io/single-writer: "true"
     spec:
       containers:
         - name: lucentflow-worker
           image: lucentflow/lucentflow-api:1.2.0-STABLE
           imagePullPolicy: IfNotPresent
           args: ["--spring.profiles.active=worker"]
+          # Port is for kubelet probes only — no Service should select this pod.
+          ports:
+            - name: http
+              containerPort: 8080
           envFrom:
             - secretRef:
                 name: lucentflow-secrets
@@ -88,6 +115,22 @@ spec:
               value: "true"
             - name: LUCENTFLOW_RUNTIME_ENABLE_ANALYZER
               value: "true"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             requests:
               cpu: "500m"

@@ -1,6 +1,10 @@
 # Worker profile: indexer + analyzer without changing web surface (monolith jar still boots Actuator).
 # Prefer pairing with LUCENTFLOW_RUNTIME_* env overrides in K8s.
 # java -jar lucentflow.jar --spring.profiles.active=worker
+#
+# HARD CONSTRAINT: run exactly one worker process cluster-wide until leader election exists.
+# Multiple workers race sync_status ID=1 and corrupt the indexer checkpoint.
+# See lucentflow-deployment/k8s/README.md (replicas=1, Recreate, NetworkPolicy, no Service).
 lucentflow:
   runtime:
     enable-indexer: true

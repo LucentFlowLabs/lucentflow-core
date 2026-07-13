@@ -359,6 +359,22 @@ curl http://localhost:8080/actuator/health
 # Expected: {"status":"UP"}
 ```
 
+### Kubernetes (api / worker split)
+
+Manifests live under `lucentflow-deployment/k8s/`.
+
+**HARD CONSTRAINT — single-writer worker:** Until lease-based leader election exists, run **exactly one** `lucentflow-worker` replica. Multiple writers race `sync_status` **ID=1** and corrupt the indexer checkpoint.
+
+| Rule | Enforcement |
+|------|-------------|
+| `replicas: 1` | Deployment + annotations `lucentflow.io/max-replicas: "1"` |
+| `strategy: Recreate` | Avoids two writers during rollouts |
+| No worker Service | Only `lucentflow-api` has a ClusterIP |
+| Ingress deny | `networkpolicy.yaml` blocks pod-to-pod access to worker |
+| Probes | Worker readiness/liveness → `/actuator/health` (kubelet; no Service required) |
+
+Do **not** `kubectl scale` the worker or attach an HPA until leader election ships. See `lucentflow-deployment/k8s/README.md`.
+
 ### Service Management
 
 ```bash
