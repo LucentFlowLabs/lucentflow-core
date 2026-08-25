@@ -218,6 +218,7 @@ public class PipelineOrchestrator implements SmartLifecycle {
                 // CHECKPOINT: persist progress using ID 1 Protocol after each chunk.
                 // Async checkpoint reduces idle time between chunks; losing a checkpoint only
                 // causes reprocessing (idempotent upsert), not data loss.
+                // SQL is monotonic (GREATEST) so out-of-order completions cannot regress height.
                 if (isShuttingDown.get()) {
                     log.info("Pipeline shutdown requested. Skipping checkpoint submission for chunkEnd={}.", chunkEnd);
                     break;
@@ -460,10 +461,12 @@ public class PipelineOrchestrator implements SmartLifecycle {
     
     /**
      * Updates synchronization status after successful block processing.
-     * 
+     *
      * <p>Called only after all blocks in the range are successfully processed.
-     * Ensures exactly-once semantics and prevents data loss during restarts.</p>
-     * 
+     * Chunks submit this asynchronously; {@code updateProgress} / {@code upsertProgress}
+     * apply {@code GREATEST} so a later-finishing older chunk cannot regress
+     * {@code last_scanned_block}.</p>
+     *
      * @param lastProcessedBlock The highest block number successfully processed
      * @throws RuntimeException if status update fails (critical error)
      */

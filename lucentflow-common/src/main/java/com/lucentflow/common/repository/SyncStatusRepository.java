@@ -33,6 +33,10 @@ public interface SyncStatusRepository extends JpaRepository<SyncStatus, Long> {
      * <p>Uses a native update to avoid accidental insertion of multiple rows and to ensure
      * deterministic checkpoint persistence on crash/restart boundaries.</p>
      *
+     * <p>Height is monotonic: {@code GREATEST} so out-of-order async chunk checkpoints
+     * cannot regress {@code last_scanned_block}. The row is still matched when the
+     * incoming height is lower, so a return of {@code 0} means the id=1 row is missing.</p>
+     *
      * @param id Row id (must be 1L for ID 1 Protocol)
      * @param blockNumber Latest fully processed block height
      * @param updatedAt Timestamp for audit trail (UTC Instant)
@@ -41,7 +45,7 @@ public interface SyncStatusRepository extends JpaRepository<SyncStatus, Long> {
     @Modifying
     @Transactional
     @Query(value = "UPDATE sync_status " +
-            "SET last_scanned_block = :blockNumber, updated_at = :updatedAt " +
+            "SET last_scanned_block = GREATEST(last_scanned_block, :blockNumber), updated_at = :updatedAt " +
             "WHERE id = :id",
             nativeQuery = true)
     int updateProgress(@Param("id") Long id,
@@ -53,6 +57,8 @@ public interface SyncStatusRepository extends JpaRepository<SyncStatus, Long> {
      * <p>
      * Used to avoid optimistic locking/version mismatch when the DB is empty
      * (e.g., after TRUNCATE) and multiple virtual threads start concurrently.
+     * On conflict, height is monotonic ({@code GREATEST}) so a stale in-memory
+     * alignment write cannot regress {@code last_scanned_block}.
      * </p>
      *
      * @param id  sync_status primary key (must be 1L for ID=1 protocol)
@@ -63,7 +69,7 @@ public interface SyncStatusRepository extends JpaRepository<SyncStatus, Long> {
     @Query(
             value = "INSERT INTO sync_status (id, last_scanned_block, sync_status, created_at, updated_at) " +
                     "VALUES (:id, :block, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) " +
-                    "ON CONFLICT (id) DO UPDATE SET last_scanned_block = EXCLUDED.last_scanned_block, updated_at = CURRENT_TIMESTAMP",
+                    "ON CONFLICT (id) DO UPDATE SET last_scanned_block = GREATEST(sync_status.last_scanned_block, EXCLUDED.last_scanned_block), updated_at = CURRENT_TIMESTAMP",
             nativeQuery = true
     )
     void upsertProgress(@Param("id") Long id, @Param("block") Long block);
