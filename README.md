@@ -173,6 +173,16 @@ curl http://localhost:8080/actuator/health
 
 ---
 
+## Agent instructions
+
+| File | When it loads |
+|------|----------------|
+| [`AGENTS.md`](AGENTS.md) | Always (Cursor / Codex / Copilot coding agents) |
+| [`PROCESS.md`](PROCESS.md) | On demand — `@PROCESS.md` or `/process` to start a work session |
+| `/test` · `/architect-review` · `/accept` | On demand — test, protocol review, human acceptance checklist |
+
+Human runbooks stay under [`docs/`](docs/). Milestone log: [`PROGRESS.md`](PROGRESS.md).
+
 ## License
 
 **Apache License 2.0** — built for the Base ecosystem and for teams who demand **sovereign**, **verifiable** security infrastructure.

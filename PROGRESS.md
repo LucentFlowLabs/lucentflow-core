@@ -1,5 +1,7 @@
 # LucentFlow Progress & Architecture Review
 
+> **Agent files (do not treat this log as the contract):** [`AGENTS.md`](AGENTS.md) always-on · [`PROCESS.md`](PROCESS.md) attach to start a session (`@PROCESS.md` / `/process`).
+>
 > **Version:** 1.2.0-STABLE  
 > **Review date:** 2026-07-13  
 > **Stack:** Java 21 (Virtual Threads) · Spring Boot 3.4 · Maven 3.9 · PostgreSQL 16 · Generational ZGC  

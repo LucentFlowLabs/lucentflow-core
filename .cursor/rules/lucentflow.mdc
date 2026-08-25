@@ -1,0 +1,7 @@
+---
+alwaysApply: true
+---
+
+Follow repository root `AGENTS.md` (coding contract, hard protocols, commands).
+
+Session playbook is `PROCESS.md`. Load it only when the operator `@PROCESS.md`, `@process`, or `/process`. Do not ingest `PROCESS.md` on every turn.
