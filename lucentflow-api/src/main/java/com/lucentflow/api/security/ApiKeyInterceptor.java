@@ -18,6 +18,7 @@ import java.util.Optional;
 
 /**
  * Lightweight project authentication using X-Project-Key (hashed at rest).
+ * Daily quota is reserved in {@code preHandle} and refunded here on non-2xx.
  *
  * @author ArchLucent
  * @since 1.0
@@ -59,8 +60,8 @@ public class ApiKeyInterceptor implements HandlerInterceptor {
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
         try {
             Long projectId = ProjectContext.getProjectId();
-            if (projectId != null && isSuccessfulResponse(response)) {
-                projectApiUsageService.recordRequestAsync(projectId);
+            if (projectId != null && !isSuccessfulResponse(response)) {
+                projectApiUsageService.releaseReservation(projectId);
             }
         } finally {
             ProjectContext.clear();

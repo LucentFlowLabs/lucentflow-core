@@ -85,6 +85,14 @@ public interface WhaleTransactionRepository extends JpaRepository<WhaleTransacti
      * @return Page of whale transactions from the specified address
      */
     Page<WhaleTransaction> findByFromAddress(String fromAddress, Pageable pageable);
+
+    /**
+     * Latest indexed row touching this address as sender or recipient.
+     */
+    Optional<WhaleTransaction> findFirstByFromAddressOrToAddressOrderByTimestampDesc(
+            String fromAddress,
+            String toAddress
+    );
     
     /**
      * Find whale transactions by to address

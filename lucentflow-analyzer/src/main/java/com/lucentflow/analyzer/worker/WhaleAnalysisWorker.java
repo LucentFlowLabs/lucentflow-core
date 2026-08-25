@@ -6,10 +6,13 @@ import com.lucentflow.common.lease.LeadershipGate;
 import com.lucentflow.common.utils.EthUnitConverter;
 import com.lucentflow.common.utils.Erc20Decoder;
 import com.lucentflow.common.utils.Sha256HexDigest;
+import com.lucentflow.common.pipeline.PipedTransaction;
 import com.lucentflow.common.pipeline.TransactionPipe;
+import com.lucentflow.common.pipeline.WhaleIngressFilter;
 import com.lucentflow.analyzer.service.AddressLabeler;
 import com.lucentflow.analyzer.service.AlertService;
 import com.lucentflow.analyzer.service.FundingTopologyService;
+import com.lucentflow.analyzer.service.RiskEngine;
 import com.lucentflow.analyzer.service.TagInferenceEngine;
 import com.lucentflow.analyzer.service.TagOracleService;
 import com.lucentflow.common.repository.WhaleTransactionRepository;
@@ -31,7 +34,6 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -63,7 +65,7 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
     private final AddressLabeler addressLabeler;
     private final WhaleTransactionSink whaleDatabaseSink;
     private final FundingTracerPort creatorFundingTracer;
-    private final com.lucentflow.analyzer.service.RiskEngine riskEngine;
+    private final RiskEngine riskEngine;
     private final BlockSourcePort blockSource;
     private final WhaleTransactionRepository whaleTransactionRepository;
     private final AlertService alertService;
@@ -79,14 +81,32 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     private final AtomicLong catchUpCheckAtMs = new AtomicLong(0);
-    private volatile boolean catchUpMode = false;
+    private volatile Long cachedBlockLag;
 
     // T10 Standard: Class-level ExecutorService for nuclear shutdown
     private ExecutorService executor;
 
-    // Async sink backpressure: allow a small number of in-flight batch writes.
-    // Non-final to avoid being pulled into Lombok-generated constructor params.
+    /**
+     * Caps concurrent UPSERT batches so drain workers back-pressure the pipe instead of
+     * stacking unbounded in-flight writes.
+     */
     private Semaphore dbSaveSemaphore = new Semaphore(2);
+
+    private static final long SINK_RETRY_INITIAL_MS = 200L;
+    private static final long SINK_RETRY_MAX_MS = 5_000L;
+
+    /**
+     * Sleep between UPSERT retries. Package-visible so tests can skip wall-clock backoff.
+     *
+     * @author ArchLucent
+     * @since 1.2
+     */
+    @FunctionalInterface
+    interface SinkRetrySleep {
+        void sleep(long millis) throws InterruptedException;
+    }
+
+    SinkRetrySleep sinkRetrySleep = Thread::sleep;
 
     @Value("${lucentflow.analyzer.batch-size:20}")
     private int batchSize;
@@ -94,7 +114,9 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
     @Value("${lucentflow.analyzer.concurrency:2}")
     private int concurrency;
 
-    private static final long CATCH_UP_LAG_THRESHOLD_BLOCKS = 500L;
+    @Value("${lucentflow.analyzer.catch-up-lag-blocks:500}")
+    private long catchUpLagThresholdBlocks = 500L;
+
     private static final int CATCH_UP_TRACE_MIN_RISK_SCORE = 60;
 
     /**
@@ -225,7 +247,7 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
                         continue;
                     }
                     log.debug("Worker-{} polling for next batch...", workerId);
-                    List<Transaction> rawBatch = transactionPipe.drainBatch(Math.max(1, batchSize));
+                    List<PipedTransaction> rawBatch = transactionPipe.drainBatch(Math.max(1, batchSize));
 
                     if (rawBatch.isEmpty()) {
                         if (isShuttingDown.get()) {
@@ -254,27 +276,28 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
                             tagInferenceEngine.inferCandidateTags(w);
                             tagOracleService.applyResolvedTags(w);
                         }
-                        // Massive performance gain: SQL Batch Insert
-                        int batchSize = whaleBatch.size();
-                        whaleCount.addAndGet(batchSize);
+                        boolean acquired = false;
                         try {
-                            // Don't let DB writes stall transaction draining indefinitely.
                             dbSaveSemaphore.acquire();
+                            acquired = true;
                         } catch (InterruptedException ie) {
                             Thread.currentThread().interrupt();
-                            return;
                         }
-                        CompletableFuture.runAsync(() -> {
-                            try {
-                                persistThenAlert(whaleBatch);
-                            } catch (RuntimeException e) {
-                                errorCount.incrementAndGet();
-                                log.error("[SINK-ASYNC] UPSERT failed; alerts skipped for batch of {}.",
-                                        whaleBatch.size(), e);
-                            } finally {
+                        try {
+                            persistThenAlertUntilSuccess(whaleBatch);
+                            whaleCount.addAndGet(whaleBatch.size());
+                        } catch (RuntimeException e) {
+                            errorCount.incrementAndGet();
+                            log.error("[SINK-RETRY] persist abandoned for batch of {} hashes={}.",
+                                    whaleBatch.size(), sinkBatchHashes(whaleBatch), e);
+                            if (Thread.currentThread().isInterrupted()) {
+                                return;
+                            }
+                        } finally {
+                            if (acquired) {
                                 dbSaveSemaphore.release();
                             }
-                        }, executor);
+                        }
                     }
 
                     processedCount.addAndGet(rawBatch.size());
@@ -307,7 +330,68 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         }
     }
 
-    private CompletableFuture<WhaleTransaction> processAndFilterWhaleAsync(Transaction tx) {
+    /**
+     * Retry UPSERT until it succeeds so a transient DB failure cannot drop a drained batch.
+     * Alerts still run only after a successful persist. Interrupt triggers one last attempt;
+     * if that fails the exception propagates and hashes are logged by the caller.
+     *
+     * @param whaleBatch enriched whales for this drain cycle
+     */
+    void persistThenAlertUntilSuccess(List<WhaleTransaction> whaleBatch) {
+        if (whaleBatch == null || whaleBatch.isEmpty()) {
+            return;
+        }
+        long backoffMs = SINK_RETRY_INITIAL_MS;
+        int attempt = 0;
+        while (true) {
+            try {
+                persistThenAlert(whaleBatch);
+                if (attempt > 0) {
+                    log.info("[SINK-RETRY] UPSERT succeeded after {} retries for batch of {}.",
+                            attempt, whaleBatch.size());
+                }
+                return;
+            } catch (RuntimeException e) {
+                attempt++;
+                log.warn("[SINK-RETRY] UPSERT failed (attempt {}); retrying {} txs hashes={}: {}",
+                        attempt, whaleBatch.size(), sinkBatchHashes(whaleBatch), e.toString());
+                if (Thread.currentThread().isInterrupted()) {
+                    persistThenAlertLastChance(whaleBatch);
+                    return;
+                }
+                try {
+                    sinkRetrySleep.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    persistThenAlertLastChance(whaleBatch);
+                    return;
+                }
+                backoffMs = Math.min(backoffMs * 2, SINK_RETRY_MAX_MS);
+            }
+        }
+    }
+
+    private void persistThenAlertLastChance(List<WhaleTransaction> whaleBatch) {
+        persistThenAlert(whaleBatch);
+        log.info("[SINK-RETRY] last-chance UPSERT succeeded for batch of {}.", whaleBatch.size());
+    }
+
+    private static String sinkBatchHashes(List<WhaleTransaction> whaleBatch) {
+        StringBuilder hashes = new StringBuilder();
+        for (WhaleTransaction tx : whaleBatch) {
+            if (tx == null || tx.getHash() == null) {
+                continue;
+            }
+            if (hashes.length() > 0) {
+                hashes.append(',');
+            }
+            hashes.append(tx.getHash());
+        }
+        return hashes.toString();
+    }
+
+    private CompletableFuture<WhaleTransaction> processAndFilterWhaleAsync(PipedTransaction piped) {
+        Transaction tx = piped.transaction();
         try {
             // 1. Threshold check
             if (!isWhale(tx)) return CompletableFuture.completedFuture(null);
@@ -321,7 +405,7 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
                     .blockNumber(tx.getBlockNumber().longValue())
                     .gasPrice(tx.getGasPrice())
                     .isContractCreation(tx.getTo() == null || tx.getTo().trim().isEmpty())
-                    .timestamp(java.time.Instant.now())
+                    .timestamp(piped.blockTimestamp())
                     .build();
 
             if (Boolean.TRUE.equals(whaleTx.getIsContractCreation())) {
@@ -341,60 +425,13 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
     }
 
     /**
-     * Evaluates if a transaction qualifies as a whale movement or contract deployment.
-     * Implements strict industrial-grade filtering.
-     * 
+     * Same ingress rules as the indexer pipe push ({@link WhaleIngressFilter}).
+     *
      * @param tx The raw Web3j transaction
-     * @return true if the transaction is a whale movement or contract deployment, false otherwise
+     * @return true if the transaction is a whale movement or contract deployment
      */
     private boolean isWhale(Transaction tx) {
-        if (tx == null) return false;
-        
-        // 1. Always Capture Contract Creations (0 ETH threshold)
-        if (tx.getTo() == null || tx.getTo().trim().isEmpty()) {
-            log.debug("[FILTER-PASS] High-value/Creation detected: 0 ETH");
-            return true;
-        }
-
-        // Module 3: candidate ERC-20 calls to tracked Base core tokens (USDC, AERO, DEGEN).
-        if (Erc20Decoder.isCoreTokenContract(tx.getTo())) {
-            log.debug("[FILTER-PASS] Core token contract interaction (receipt decode required)");
-            return true;
-        }
-
-        // Handle null values to avoid NPE
-        if (tx.getValue() == null) return false;
-        
-        // Ensure accurate detection of contract calls: input data length > 10 (0x + 8 chars method sig)
-        boolean isContractCall = tx.getInput() != null && tx.getInput().length() > 10;
-        
-        BigDecimal valueInEth = EthUnitConverter.weiToEther(tx.getValue());
-        
-        if (isContractCall) {
-            // Special Exception: Renounce Ownership signature (0x715018a6) -> 0 ETH Threshold
-            if (tx.getInput().contains("715018a6")) {
-                log.debug("[FILTER-PASS] {} ETH captured", valueInEth);
-                return true;
-            }
-            
-            // 2. Contract Calls -> 5.0 ETH Threshold
-            if (valueInEth.compareTo(new BigDecimal("5.0")) >= 0) {
-                log.debug("[FILTER-PASS] {} ETH captured", valueInEth);
-                return true;
-            } else {
-                log.debug("[FILTER-DROP] Value {} is below threshold for CONTRACT_CALL", valueInEth);
-                return false;
-            }
-        }
-        
-        // 3. Regular ETH Transfers -> 10.0 ETH Threshold (Hard limit)
-        if (valueInEth.compareTo(new BigDecimal("10.0")) >= 0) {
-            log.debug("[FILTER-PASS] {} ETH captured", valueInEth);
-            return true;
-        } else {
-            log.debug("[FILTER-DROP] Value {} is below threshold for ETH_TRANSFER", valueInEth);
-            return false;
-        }
+        return WhaleIngressFilter.matches(tx);
     }
 
     private CompletableFuture<WhaleTransaction> enrichAsync(WhaleTransaction whaleTx, Transaction tx) {
@@ -466,17 +503,15 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
             boolean tokenCandidate = Erc20Decoder.isCoreTokenContract(tx.getTo());
             // Performance budget: avoid receipt fetching for low-value contract calls.
             // Receipt calls are expensive (CU) and we only need them when:
-            // - valueEth > 5.0, or
+            // - valueEth >= 5.0, or
             // - contract creation (to preserve integrity signal for factories), or
             // - candidate core-token contract (ERC-20 outpost).
             boolean shouldFetchReceipt = Boolean.TRUE.equals(whaleTx.getIsContractCreation())
-                    || (value != null && value.compareTo(new BigDecimal("5.0")) > 0)
+                    || (value != null && value.compareTo(WhaleIngressFilter.CONTRACT_CALL_THRESHOLD_ETH) >= 0)
                     || tokenCandidate;
 
             if (!shouldFetchReceipt) {
-                applyRiskScoring(enrichedTx, tx);
-                applyRevertRiskAdjustment(enrichedTx);
-                return applyGenesisTraceIfHighRisk(enrichedTx, tx);
+                return completeScoringWithOptionalGenesis(enrichedTx, tx);
             }
 
             return blockSource.fetchTransactionReceiptAsync(tx.getHash())
@@ -499,9 +534,7 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
             if (tokenCandidate) {
                 return CompletableFuture.completedFuture(null);
             }
-            applyRiskScoring(enrichedTx, tx);
-            applyRevertRiskAdjustment(enrichedTx);
-            return applyGenesisTraceIfHighRisk(enrichedTx, tx);
+            return completeScoringWithOptionalGenesis(enrichedTx, tx);
         }
 
         enrichedTx.setExecutionStatus(receipt.isStatusOK() ? "SUCCESS" : "REVERTED");
@@ -534,9 +567,7 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
             }
         }
 
-        applyRiskScoring(enrichedTx, tx);
-        applyRevertRiskAdjustment(enrichedTx);
-        return applyGenesisTraceIfHighRisk(enrichedTx, tx);
+        return completeScoringWithOptionalGenesis(enrichedTx, tx);
     }
 
     private boolean shouldSkipTracingInCatchUp(BigDecimal valueEth) {
@@ -549,25 +580,13 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         return isCatchUpMode();
     }
 
+    /**
+     * True when head minus last-scanned exceeds {@link #catchUpLagThresholdBlocks}.
+     * Fail-open (false) when lag cannot be read so tracing is not skipped on RPC errors.
+     */
     private boolean isCatchUpMode() {
-        long now = System.currentTimeMillis();
-        long last = catchUpCheckAtMs.get();
-        if (now - last < 5_000L) {
-            return catchUpMode;
-        }
-        if (!catchUpCheckAtMs.compareAndSet(last, now)) {
-            return catchUpMode;
-        }
-        try {
-            long lastScanned = blockSource.getLastScannedBlock();
-            long head = blockSource.getLatestBlockNumber();
-            catchUpMode = (head - lastScanned) > 5_000L;
-            return catchUpMode;
-        } catch (Exception e) {
-            // Fail-open: don't skip tracing if we can't safely determine catch-up state.
-            catchUpMode = false;
-            return false;
-        }
+        Long lag = getBlockLagCached();
+        return lag != null && lag > catchUpLagThresholdBlocks;
     }
 
     private static boolean isMessageDecodingGlitch(Throwable ex) {
@@ -588,38 +607,53 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
     }
 
     /**
-     * Genesis Trace 2.0: for whales with elevated risk, recursively audit funding origin (SQL, max 3 hops).
-     * Blacklisted funders bump score further; results are on the entity before batch persist.
+     * Engine heuristics, optional Genesis Trace when ingest risk is elevated, then {@link RiskEngine#complete}.
+     *
+     * @param whaleTx enriched whale
+     * @param tx      raw chain transaction
+     * @return scored whale
      */
-    private CompletableFuture<WhaleTransaction> applyGenesisTraceIfHighRisk(WhaleTransaction whaleTx, Transaction tx) {
-        Integer score = whaleTx.getRiskScore();
-        if (score == null || score <= 40) {
-            normalizeRiskProfile(whaleTx);
-            return CompletableFuture.completedFuture(whaleTx);
-        }
-        if (shouldSkipDeepOriginTrace(score)) {
-            normalizeRiskProfile(whaleTx);
+    private CompletableFuture<WhaleTransaction> completeScoringWithOptionalGenesis(
+            WhaleTransaction whaleTx, Transaction tx) {
+        RiskEngine.RiskAssessment base = engineAssessment(whaleTx, tx);
+        boolean reverted = "REVERTED".equals(whaleTx.getExecutionStatus());
+        int gateScore = RiskEngine.rawAfterRevert(base, reverted);
+        if (!RiskEngine.shouldTraceGenesis(gateScore)
+                || shouldSkipDeepOriginTrace(gateScore)) {
+            applyCompletedScoring(whaleTx, base, reverted, false);
             return CompletableFuture.completedFuture(whaleTx);
         }
         String initiator = tx.getFrom();
         if (initiator == null || initiator.isBlank()) {
-            normalizeRiskProfile(whaleTx);
+            applyCompletedScoring(whaleTx, base, reverted, false);
             return CompletableFuture.completedFuture(whaleTx);
         }
         return creatorFundingTracer.traceOriginAsync(initiator).thenApply(opt -> {
-            opt.ifPresent(o -> {
+            boolean blacklisted = opt.map(o -> {
                 whaleTx.setFundingSourceAddress(o.fundingSourceAddress());
                 whaleTx.setFundingSourceTag(o.fundingSourceTag());
                 fundingTopologyService.recordGenesisEdge(initiator, o, whaleTx.getHash());
-                if (o.blacklisted()) {
-                    int base = whaleTx.getRiskScore() == null ? 0 : whaleTx.getRiskScore();
-                    whaleTx.setRiskScore(base + 35);
-                    appendRiskReason(whaleTx, "BLACKLISTED_FUNDING_SOURCE", 35);
-                }
-            });
-            normalizeRiskProfile(whaleTx);
+                return o.blacklisted();
+            }).orElse(false);
+            applyCompletedScoring(whaleTx, base, reverted, blacklisted);
             return whaleTx;
         });
+    }
+
+    private RiskEngine.RiskAssessment engineAssessment(WhaleTransaction whaleTx, Transaction tx) {
+        int recentDeploymentCount = countRecentDeploymentsForInitiator(tx.getFrom());
+        int identicalBytecodeCount = countIdenticalBytecodeDeployments(whaleTx.getBytecodeHash());
+        return riskEngine.calculateRisk(whaleTx, tx, recentDeploymentCount, identicalBytecodeCount);
+    }
+
+    private void applyCompletedScoring(
+            WhaleTransaction whaleTx,
+            RiskEngine.RiskAssessment base,
+            boolean reverted,
+            boolean blacklistedFunding) {
+        RiskEngine.CompletedScore scored = riskEngine.complete(base, reverted, blacklistedFunding);
+        whaleTx.setRiskScore(scored.score());
+        whaleTx.setRiskReasons(new LinkedHashMap<>(scored.reasons()));
     }
 
     /**
@@ -630,21 +664,22 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         if (riskScore >= CATCH_UP_TRACE_MIN_RISK_SCORE) {
             return false;
         }
-        Long lag = getBlockLagCached();
-        return lag != null && lag > CATCH_UP_LAG_THRESHOLD_BLOCKS;
+        return isCatchUpMode();
     }
 
     private Long getBlockLagCached() {
-        // Reuse existing 5s sampling window to avoid hot-looping RPC calls.
         long now = System.currentTimeMillis();
         long last = catchUpCheckAtMs.get();
         if (now - last < 5_000L) {
-            return computeBlockLagSilently();
+            return cachedBlockLag;
         }
         if (!catchUpCheckAtMs.compareAndSet(last, now)) {
-            return computeBlockLagSilently();
+            Long cached = cachedBlockLag;
+            return cached != null ? cached : computeBlockLagSilently();
         }
-        return computeBlockLagSilently();
+        Long lag = computeBlockLagSilently();
+        cachedBlockLag = lag;
+        return lag;
     }
 
     private Long computeBlockLagSilently() {
@@ -655,30 +690,6 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    private void appendRiskReason(WhaleTransaction whaleTx, String reasonKey, int points) {
-        if (whaleTx == null || reasonKey == null || reasonKey.isBlank() || points <= 0) {
-            return;
-        }
-        Map<String, Integer> reasons = new LinkedHashMap<>(safeReasons(whaleTx.getRiskReasons()));
-        Integer existing = reasons.get(reasonKey);
-        reasons.put(reasonKey, (existing == null ? 0 : existing) + points);
-        whaleTx.setRiskReasons(reasons);
-    }
-
-    /**
-     * Applies institutional-grade risk scoring to the transaction based on predefined heuristics.
-     * 
-     * @param whaleTx The WhaleTransaction entity to score
-     * @param tx The raw Web3j transaction
-     */
-    private void applyRiskScoring(WhaleTransaction whaleTx, Transaction tx) {
-        int recentDeploymentCount = countRecentDeploymentsForInitiator(tx.getFrom());
-        int identicalBytecodeCount = countIdenticalBytecodeDeployments(whaleTx.getBytecodeHash());
-        var riskAssessment = riskEngine.calculateRisk(whaleTx, tx, recentDeploymentCount, identicalBytecodeCount);
-        whaleTx.setRiskScore(riskAssessment.rawScore());
-        whaleTx.setRiskReasons(new LinkedHashMap<>(riskAssessment.reasons()));
     }
 
     /**
@@ -734,43 +745,5 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
             log.warn("[SERIAL-DEPLOYER] countRecentDeployments failed for {}: {}", fromAddress, e.getMessage());
             return 0;
         }
-    }
-
-    /**
-     * Adjusts risk score and reasons for reverted transactions as part of the
-     * Transaction Integrity Audit module.
-     *
-     * @param whaleTx Whale transaction to adjust
-     */
-    private void applyRevertRiskAdjustment(WhaleTransaction whaleTx) {
-        if (whaleTx == null) {
-            return;
-        }
-
-        if (!"REVERTED".equals(whaleTx.getExecutionStatus())) {
-            return;
-        }
-
-        Integer baseScore = whaleTx.getRiskScore();
-        int adjustedScore = (baseScore == null ? 0 : baseScore) + 40;
-        whaleTx.setRiskScore(adjustedScore);
-        appendRiskReason(whaleTx, "REVERT_PROBE", 40);
-    }
-
-    private void normalizeRiskProfile(WhaleTransaction whaleTx) {
-        if (whaleTx == null) {
-            return;
-        }
-        int rawScore = whaleTx.getRiskScore() == null ? 0 : whaleTx.getRiskScore();
-        int normalizedScore = Math.max(0, Math.min(100, rawScore));
-        whaleTx.setRiskScore(normalizedScore);
-        whaleTx.setRiskReasons(new LinkedHashMap<>(safeReasons(whaleTx.getRiskReasons())));
-    }
-
-    private Map<String, Integer> safeReasons(Map<String, Integer> reasons) {
-        if (reasons == null || reasons.isEmpty()) {
-            return Map.of("BASELINE_NORMAL", 0);
-        }
-        return reasons;
     }
 }

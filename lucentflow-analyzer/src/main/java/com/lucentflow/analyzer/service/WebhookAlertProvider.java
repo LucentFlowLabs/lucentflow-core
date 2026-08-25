@@ -3,6 +3,7 @@ package com.lucentflow.analyzer.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lucentflow.common.entity.WhaleTransaction;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -22,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Generic outbound Webhook provider for high-risk alerts.
@@ -35,7 +37,6 @@ public class WebhookAlertProvider implements AlertProvider {
 
     private static final int MAX_ATTEMPTS = 3;
     private static final long[] BACKOFF_MS = new long[]{1_000L, 2_000L, 4_000L};
-    private static final Semaphore WEBHOOK_BULKHEAD = new Semaphore(50);
     private static final ExecutorService WEBHOOK_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
     private static final String SIGNATURE_HEADER = "X-LucentFlow-Signature";
     private static final String HMAC_SHA256 = "HmacSHA256";
@@ -45,18 +46,45 @@ public class WebhookAlertProvider implements AlertProvider {
     private final String webhookUrl;
     private final String secretToken;
     private final WebhookDeliveryStatusTracker deliveryStatusTracker;
+    private final Semaphore webhookBulkhead;
+    private final long bulkheadAcquireTimeoutMs;
 
+    @Autowired
     public WebhookAlertProvider(
             ObjectMapper objectMapper,
             WebhookDeliveryStatusTracker deliveryStatusTracker,
             @Value("${lucentflow.webhook.url:}") String webhookUrl,
             @Value("${lucentflow.webhook.secret-token:}") String secretToken,
-            @Value("${lucentflow.webhook.connect-timeout-ms:5000}") long connectTimeoutMs
+            @Value("${lucentflow.webhook.connect-timeout-ms:5000}") long connectTimeoutMs,
+            @Value("${lucentflow.webhook.bulkhead-permits:50}") int bulkheadPermits,
+            @Value("${lucentflow.webhook.bulkhead-acquire-timeout-ms:10000}") long bulkheadAcquireTimeoutMs
+    ) {
+        this(
+                objectMapper,
+                deliveryStatusTracker,
+                webhookUrl,
+                secretToken,
+                connectTimeoutMs,
+                new Semaphore(Math.max(1, bulkheadPermits)),
+                Math.max(0L, bulkheadAcquireTimeoutMs)
+        );
+    }
+
+    WebhookAlertProvider(
+            ObjectMapper objectMapper,
+            WebhookDeliveryStatusTracker deliveryStatusTracker,
+            String webhookUrl,
+            String secretToken,
+            long connectTimeoutMs,
+            Semaphore webhookBulkhead,
+            long bulkheadAcquireTimeoutMs
     ) {
         this.objectMapper = objectMapper;
         this.deliveryStatusTracker = deliveryStatusTracker;
         this.webhookUrl = webhookUrl;
         this.secretToken = secretToken;
+        this.webhookBulkhead = webhookBulkhead;
+        this.bulkheadAcquireTimeoutMs = bulkheadAcquireTimeoutMs;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.max(1000L, connectTimeoutMs)))
                 .executor(WEBHOOK_EXECUTOR)
@@ -91,10 +119,20 @@ public class WebhookAlertProvider implements AlertProvider {
         return true;
     }
 
-    private void doSendWithRetry(WhaleTransaction tx, AlertDispatchContext context) {
-        boolean acquired = WEBHOOK_BULKHEAD.tryAcquire();
+    void doSendWithRetry(WhaleTransaction tx, AlertDispatchContext context) {
+        boolean acquired;
+        try {
+            acquired = webhookBulkhead.tryAcquire(bulkheadAcquireTimeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("[WEBHOOK] Interrupted while waiting for bulkhead tx={}", tx.getHash());
+            deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
+            return;
+        }
         if (!acquired) {
-            log.warn("[WEBHOOK] Bulkhead saturated (50). Dropping tx {}", tx.getHash());
+            log.error("[WEBHOOK] Bulkhead saturated after {} ms. Dropping tx {}",
+                    bulkheadAcquireTimeoutMs, tx.getHash());
+            deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
             return;
         }
         try {
@@ -139,7 +177,7 @@ public class WebhookAlertProvider implements AlertProvider {
             deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
             log.warn("[WEBHOOK] payload/build failed tx={} err={}", tx.getHash(), e.getMessage());
         } finally {
-            WEBHOOK_BULKHEAD.release();
+            webhookBulkhead.release();
         }
     }
 

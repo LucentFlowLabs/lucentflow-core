@@ -15,6 +15,9 @@ public record ProjectDTO(
         String webhookUrl,
         boolean webhookSecretConfigured,
         Boolean isActive,
+        String plan,
+        Integer dailyRequestQuota,
+        Integer watchlistLimit,
         Instant createdAt
 ) {
 }

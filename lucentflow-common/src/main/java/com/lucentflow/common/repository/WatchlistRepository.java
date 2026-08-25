@@ -25,4 +25,6 @@ public interface WatchlistRepository extends JpaRepository<Watchlist, Long> {
     Optional<Watchlist> findByIdAndProjectId(Long id, Long projectId);
 
     boolean existsByAddressAndProjectId(String address, Long projectId);
+
+    long countByProjectId(Long projectId);
 }

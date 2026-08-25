@@ -6,6 +6,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.web3j.protocol.core.methods.response.Transaction;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
@@ -27,7 +28,7 @@ public class TransactionPipe {
 
     // T10 Standard: Always use bounded queues to prevent OOM
     private static final int QUEUE_CAPACITY = 5000;
-    private final BlockingQueue<Transaction> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
+    private final BlockingQueue<PipedTransaction> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
 
     private final AtomicLong totalProcessed = new AtomicLong(0);
     private final AtomicLong backpressureEvents = new AtomicLong(0);
@@ -35,8 +36,16 @@ public class TransactionPipe {
 
     /**
      * Pushes a transaction with built-in backpressure detection.
+     * Prefer {@link #push(Transaction, Instant)} so catch-up ingest keeps the block time.
      */
     public void push(Transaction tx) throws InterruptedException {
+        push(tx, Instant.now());
+    }
+
+    /**
+     * Pushes a whale candidate together with the producing block timestamp.
+     */
+    public void push(Transaction tx, Instant blockTimestamp) throws InterruptedException {
         if (tx == null) {
             return;
         }
@@ -45,8 +54,9 @@ public class TransactionPipe {
             return;
         }
 
+        PipedTransaction item = new PipedTransaction(tx, blockTimestamp);
         int attempt = 0;
-        while (!queue.offer(tx, 1, TimeUnit.SECONDS)) {
+        while (!queue.offer(item, 1, TimeUnit.SECONDS)) {
             if (!acceptPushes.get()) {
                 log.debug("Aborting push wait during pipe shutdown: {}", tx.getHash());
                 return;
@@ -66,8 +76,8 @@ public class TransactionPipe {
      * Efficiently drains a batch of transactions for SQL bulk inserts.
      * This is the "Nuclear Engine" for consumer throughput.
      */
-    public List<Transaction> drainBatch(int batchSize) {
-        List<Transaction> batch = new ArrayList<>(batchSize);
+    public List<PipedTransaction> drainBatch(int batchSize) {
+        List<PipedTransaction> batch = new ArrayList<>(batchSize);
         queue.drainTo(batch, batchSize);
         return batch;
     }

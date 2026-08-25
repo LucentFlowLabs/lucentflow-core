@@ -27,7 +27,7 @@ public class AlertService {
     private final AlertRuleCacheService alertRuleCacheService;
 
     @Value("${lucentflow.alert.global-risk-threshold:70}")
-    private int globalRiskThreshold;
+    private int globalRiskThreshold = 70;
 
     /**
      * Fire-and-forget to all channels; provider failures are isolated.
@@ -45,7 +45,7 @@ public class AlertService {
         for (AlertProvider alertProvider : alertProviders) {
             List<AlertDispatchContext> providerContexts = alertProvider.supportsProjectScopedDispatch()
                     ? contexts
-                    : List.of(contexts.getFirst());
+                    : List.of(AlertDispatchContext.mergeForGlobalChannel(contexts));
             for (AlertDispatchContext context : providerContexts) {
                 try {
                     alertProvider.sendHighRiskAlertAsync(tx, context);

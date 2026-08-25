@@ -9,6 +9,7 @@ import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.common.repository.WatchlistRepository;
 import com.lucentflow.common.repository.WhaleTransactionRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -30,6 +31,8 @@ import java.util.stream.Stream;
 
 /**
  * Read-only forensic query service backed by JPA Specifications.
+ * Fail-closed when {@code projectId} is null: empty page or empty export, never the global whale table.
+ * JSON/CSV export is hard-capped ({@code lucentflow.api.forensics.export-max-rows}, default 10000).
  *
  * @author ArchLucent
  * @since 1.0
@@ -40,10 +43,15 @@ public class ForensicQueryService {
 
     private static final Sort EXPORT_SORT = Sort.by(Sort.Direction.DESC, "timestamp");
     private static final byte[] UTF8_BOM = new byte[]{(byte) 0xEF, (byte) 0xBB, (byte) 0xBF};
+    private static final String CSV_HEADER =
+            "hash,blockNumber,timestamp,fromAddress,toAddress,valueEth,riskScore,rugRiskLevel,executionStatus,isContractCreation,bytecodeHash,riskReasons";
 
     private final WhaleTransactionRepository whaleTransactionRepository;
     private final WatchlistRepository watchlistRepository;
     private final ObjectMapper objectMapper;
+
+    @Value("${lucentflow.api.forensics.export-max-rows:10000}")
+    private int exportMaxRows = 10_000;
 
     @Transactional(readOnly = true)
     public Page<ForensicEventDTO> queryEvents(
@@ -55,8 +63,52 @@ public class ForensicQueryService {
             Long projectId,
             Pageable pageable
     ) {
+        if (projectId == null) {
+            return Page.empty(pageable);
+        }
         Specification<WhaleTransaction> spec = buildSpecification(minRiskScore, maxRiskScore, address, bytecodeHash, reason, projectId);
         return whaleTransactionRepository.findAll(spec, pageable).map(this::toDto);
+    }
+
+    /**
+     * Forensic read scope for the project. Empty watchlist is isolation, not an empty chain.
+     */
+    public String watchlistScope(Long projectId) {
+        if (projectId == null) {
+            return "watchlist-empty";
+        }
+        boolean empty = watchlistRepository.findAllByProjectId(projectId).stream()
+                .map(Watchlist::getAddress)
+                .noneMatch(a -> a != null && !a.isBlank());
+        return empty ? "watchlist-empty" : "watchlist";
+    }
+
+    /**
+     * Hard cap for JSON/CSV export. {@code requested} of null/≤0 uses the configured default.
+     * Values above the configured max are clamped (never unlimited).
+     */
+    public int resolveExportRowLimit(Integer requested) {
+        int cap = Math.max(1, exportMaxRows);
+        if (requested == null || requested <= 0) {
+            return cap;
+        }
+        return Math.min(requested, cap);
+    }
+
+    @Transactional(readOnly = true)
+    public long countEvents(
+            Integer minRiskScore,
+            Integer maxRiskScore,
+            String address,
+            String bytecodeHash,
+            String reason,
+            Long projectId
+    ) {
+        if (projectId == null) {
+            return 0L;
+        }
+        return whaleTransactionRepository.count(
+                buildSpecification(minRiskScore, maxRiskScore, address, bytecodeHash, reason, projectId));
     }
 
     @Transactional(readOnly = true)
@@ -67,10 +119,15 @@ public class ForensicQueryService {
             String bytecodeHash,
             String reason,
             Long projectId,
+            int rowLimit,
             OutputStream outputStream
     ) throws IOException {
+        if (projectId == null) {
+            writeEmptyJsonArray(outputStream);
+            return;
+        }
         Specification<WhaleTransaction> spec = buildSpecification(minRiskScore, maxRiskScore, address, bytecodeHash, reason, projectId);
-        try (Stream<WhaleTransaction> stream = streamBySpecification(spec);
+        try (Stream<WhaleTransaction> stream = streamBySpecification(spec, rowLimit);
              JsonGenerator generator = objectMapper.getFactory().createGenerator(outputStream)) {
             generator.writeStartArray();
             stream.map(this::toDto).forEach(dto -> {
@@ -95,13 +152,18 @@ public class ForensicQueryService {
             String bytecodeHash,
             String reason,
             Long projectId,
+            int rowLimit,
             OutputStream outputStream
     ) throws IOException {
+        if (projectId == null) {
+            writeCsvHeaderOnly(outputStream);
+            return;
+        }
         Specification<WhaleTransaction> spec = buildSpecification(minRiskScore, maxRiskScore, address, bytecodeHash, reason, projectId);
         outputStream.write(UTF8_BOM);
-        try (Stream<WhaleTransaction> stream = streamBySpecification(spec);
+        try (Stream<WhaleTransaction> stream = streamBySpecification(spec, rowLimit);
              BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(outputStream, StandardCharsets.UTF_8))) {
-            writer.write("hash,blockNumber,timestamp,fromAddress,toAddress,valueEth,riskScore,rugRiskLevel,executionStatus,isContractCreation,bytecodeHash,riskReasons");
+            writer.write(CSV_HEADER);
             writer.newLine();
             stream.map(this::toDto).forEach(dto -> {
                 try {
@@ -130,9 +192,6 @@ public class ForensicQueryService {
                 .and(WhaleTransactionSpecifications.address(address))
                 .and(WhaleTransactionSpecifications.bytecodeHash(bytecodeHash))
                 .and(WhaleTransactionSpecifications.reasonContains(reason));
-        if (projectId == null) {
-            return base;
-        }
         Set<String> addresses = watchlistRepository.findAllByProjectId(projectId).stream()
                 .map(Watchlist::getAddress)
                 .filter(a -> a != null && !a.isBlank())
@@ -142,10 +201,28 @@ public class ForensicQueryService {
         return base.and(WhaleTransactionSpecifications.addressInSet(addresses));
     }
 
-    private Stream<WhaleTransaction> streamBySpecification(Specification<WhaleTransaction> spec) {
+    private Stream<WhaleTransaction> streamBySpecification(Specification<WhaleTransaction> spec, int rowLimit) {
+        int limit = Math.max(1, rowLimit);
         return whaleTransactionRepository.findBy(spec, (FluentQuery.FetchableFluentQuery<WhaleTransaction> q) ->
-                q.sortBy(EXPORT_SORT).stream()
+                q.sortBy(EXPORT_SORT).limit(limit).stream()
         );
+    }
+
+    private void writeEmptyJsonArray(OutputStream outputStream) throws IOException {
+        try (JsonGenerator generator = objectMapper.getFactory().createGenerator(outputStream)) {
+            generator.writeStartArray();
+            generator.writeEndArray();
+            generator.flush();
+        }
+    }
+
+    private void writeCsvHeaderOnly(OutputStream outputStream) throws IOException {
+        outputStream.write(UTF8_BOM);
+        try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(outputStream, StandardCharsets.UTF_8))) {
+            writer.write(CSV_HEADER);
+            writer.newLine();
+            writer.flush();
+        }
     }
 
     private ForensicEventDTO toDto(WhaleTransaction tx) {

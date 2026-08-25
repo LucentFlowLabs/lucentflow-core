@@ -42,6 +42,14 @@ public class TelegramAlertProvider implements AlertProvider {
         this.chatId = chatId;
     }
 
+    /**
+     * Operator-global Telegram bot from env. Not a per-project channel.
+     */
+    @Override
+    public boolean supportsProjectScopedDispatch() {
+        return false;
+    }
+
     @Override
     public void sendHighRiskAlertAsync(WhaleTransaction tx, AlertDispatchContext context) {
         if (tx == null) {

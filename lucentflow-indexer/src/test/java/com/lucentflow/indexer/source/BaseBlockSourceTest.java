@@ -26,6 +26,7 @@ import org.web3j.protocol.core.methods.response.Transaction;
 import org.web3j.protocol.exceptions.ClientConnectionException;
 
 import java.math.BigInteger;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -374,13 +375,14 @@ class BaseBlockSourceTest {
         // Configure block mock
         lenient().when(mockBlock.getTransactions()).thenReturn(transactionResults);
         lenient().when(mockBlock.getNumber()).thenReturn(blockNumber);
+        lenient().when(mockBlock.getTimestamp()).thenReturn(BigInteger.valueOf(1_672_531_200L));
         
         // When
         List<Transaction> transactions = baseBlockSource.getTransactionsFromBlock(mockBlock);
         
         // Then
         assertThat(transactions).hasSize(3);
-        verify(transactionPipe, times(2)).push(any(Transaction.class)); // Only whale transactions pushed
+        verify(transactionPipe, times(2)).push(any(Transaction.class), eq(Instant.ofEpochSecond(1_672_531_200L)));
         verify(mockBlock, times(1)).getTransactions();
     }
     

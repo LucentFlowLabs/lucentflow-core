@@ -1,7 +1,12 @@
 package com.lucentflow.analyzer.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lucentflow.common.entity.WhaleTransaction;
 import org.junit.jupiter.api.Test;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.concurrent.Semaphore;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -70,13 +75,43 @@ class WebhookAlertProviderTest {
         assertThat(provider.resolveSigningSecret(null)).isEqualTo("global-secret");
     }
 
+    @Test
+    void doSendWithRetry_bulkheadTimeout_marksFailureWithoutSilentDrop() {
+        WebhookDeliveryStatusTracker tracker = new WebhookDeliveryStatusTracker();
+        WebhookAlertProvider provider = new WebhookAlertProvider(
+                new ObjectMapper(),
+                tracker,
+                "https://global.example/hook",
+                "global-secret",
+                1000L,
+                new Semaphore(0),
+                0L);
+        AlertDispatchContext context = new AlertDispatchContext(
+                false, null, null, null, 9L, "https://project.example/hook", null);
+        WhaleTransaction tx = WhaleTransaction.builder()
+                .hash("0xdead")
+                .fromAddress("0xfrom")
+                .valueEth(BigDecimal.ONE)
+                .blockNumber(1L)
+                .timestamp(Instant.parse("2026-01-01T00:00:00Z"))
+                .isContractCreation(false)
+                .build();
+
+        provider.doSendWithRetry(tx, context);
+
+        assertThat(tracker.snapshot().failureCount()).isEqualTo(1);
+        assertThat(tracker.snapshot().successCount()).isZero();
+    }
+
     private static WebhookAlertProvider newProvider(String globalUrl, String globalSecret) {
         return new WebhookAlertProvider(
                 new ObjectMapper(),
                 new WebhookDeliveryStatusTracker(),
                 globalUrl,
                 globalSecret,
-                1000L
+                1000L,
+                new Semaphore(50),
+                10_000L
         );
     }
 }

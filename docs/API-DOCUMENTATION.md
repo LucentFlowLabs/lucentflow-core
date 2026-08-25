@@ -508,17 +508,39 @@ curl http://localhost:8080/api/v1/whales?minEth=100&page=0&size=5
 
 ### Forensic query scope
 
-Project-scoped forensic queries are **restricted to the project's watchlist addresses**. When a project has **no watchlist entries**, queries and exports return an **empty result set** (tenant isolation). Add watchlist addresses before expecting forensic data.
+Project-scoped forensic queries are **restricted to the project's watchlist addresses**. When a project has **no watchlist entries**, queries and exports return an **empty result set** (tenant isolation) and set header **`X-LucentFlow-Scope: watchlist-empty`**. Add watchlist addresses before expecting forensic data.
+
+JSON/CSV export is **capped** (SQL `LIMIT`) at `LUCENTFLOW_API_FORENSICS_EXPORT_MAX_ROWS` (default **10000**). Clients may pass `maxRows` to request a smaller slice; the server never exceeds the configured cap. Response headers:
+
+| Header | Meaning |
+|--------|---------|
+| `X-LucentFlow-Export-Max-Rows` | Applied limit |
+| `X-LucentFlow-Export-Matched` | Rows matching filters (before limit) |
+| `X-LucentFlow-Export-Truncated` | `true` when matched > max rows |
+
+Use paginated `GET /forensics/events` to walk the rest of the result set.
+
+Topology (`GET /api/v1/forensics/topology/{address}`) is also watchlist-gated. Addresses not on the project list return empty edges with `"scope": "watchlist-miss"`. Use **`POST /api/v1/risk/score`** to score an arbitrary address.
+
+### Outbound alerts
+
+| Channel | Scope | Config |
+|---------|--------|--------|
+| HMAC webhook | **Per project** (one POST per matching project; project URL or global `LUCENTFLOW_WEBHOOK_URL` fallback) | `projects.webhook_url` / `webhook_secret` |
+| Discord | **Operator-global** (one message per whale; watchlist labels from all matching projects are merged) | `LUCENTFLOW_DISCORD_WEBHOOK_URL` |
+| Telegram | **Operator-global** (same merge as Discord) | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` |
+
+Webhook delivery waits up to `LUCENTFLOW_WEBHOOK_BULKHEAD_ACQUIRE_TIMEOUT_MS` (default 10000) for a permit (`LUCENTFLOW_WEBHOOK_BULKHEAD_PERMITS`, default 50). Exhaustion logs **ERROR** and increments the delivery failure counter; it does not fail silently.
 
 ### Auth model & quotas
 
 | Surface | Auth | Limits |
 |---------|------|--------|
 | `/api/v1/whales`, `/whales/stats`, `/sync-status` | **None** (platform free tier) | IP soft rate limit (`LUCENTFLOW_API_PUBLIC_RATE_LIMIT_PER_MINUTE`, default 60; `0` disables) |
-| `/forensics/**`, `/watchlist/**`, `/alert-rules/**`, `/usage/**` | `X-Project-Key` | Per-project minute rate + daily quota (`LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`, `LUCENTFLOW_API_DAILY_REQUEST_QUOTA`) |
+| `/forensics/**`, `/watchlist/**`, `/alert-rules/**`, `/usage/**`, `/risk/**` | `X-Project-Key` | Per-project daily quota (`projects.daily_request_quota`, BUILDER default 2000) + per-minute rate (`LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`). Watchlist writes honor `projects.watchlist_limit` (BUILDER default 50). |
 | `/admin/projects/**` | `X-Admin-Key` | Admin key required |
 
-Project API keys are stored as **SHA-256 hashes** (`api_key_hash`); plaintext is returned only on create/rotate. Exceeding project quotas returns **HTTP 429**.
+`LUCENTFLOW_API_DAILY_REQUEST_QUOTA` is only the fallback when a project row has no quota. Daily admits are reserved atomically at request start and refunded when the response is not 2xx. Exceeding project quotas returns **HTTP 429**.
 
 ---
 
@@ -528,15 +550,42 @@ All endpoints below require the **`X-Project-Key`** header unless noted.
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
+| `/api/v1/risk/score` | POST | Project | On-demand risk score for an address or tx hash (no watchlist required) |
 | `/api/v1/forensics/events` | GET | Project | Paginated forensic event query |
-| `/api/v1/forensics/events/export/json` | GET | Project | Streaming JSON export |
-| `/api/v1/forensics/events/export/csv` | GET | Project | Streaming CSV export |
+| `/api/v1/forensics/events/export/json` | GET | Project | Streaming JSON export (row-capped) |
+| `/api/v1/forensics/events/export/csv` | GET | Project | Streaming CSV export (row-capped) |
 | `/api/v1/watchlist` | CRUD | Project | Project-scoped watchlist |
 | `/api/v1/alert-rules` | GET/PUT | Project | Alert thresholds and routing rules |
 | `/api/v1/usage?days=30` | GET | Project | Daily API request counters |
-| `/api/v1/forensics/topology/{address}` | GET | Project | Genesis Trace 3.0 funding edges |
+| `/api/v1/forensics/topology/{address}` | GET | Project | Funding edges for watchlist addresses |
 | `/api/v1/oracle/eth-usd` | GET | Public | Cached ETH/USD price |
 | `/api/v1/admin/backfill` | POST | Admin | Historical block-range backfill |
+
+### Risk Score (`POST /api/v1/risk/score`)
+
+Does **not** require the address to be on the project watchlist. Uses a dedicated RPC permit pool (`LUCENTFLOW_API_RISK_SCORE_MAX_CONCURRENT`, default 4) so lookups cannot starve the indexer. Timeout: **504** after `LUCENTFLOW_API_RISK_SCORE_TIMEOUT_MS` (default 8000) with JSON `{"status":504,"error":"Gateway Timeout","message":"..."}`. Saturated pool: **503** with the same JSON shape. Missing `address` and `txHash`: **400**. Successful scores are cached in-process with TTL `LUCENTFLOW_API_RISK_SCORE_CACHE_TTL_MS` (default 60s) and max size `LUCENTFLOW_API_RISK_SCORE_CACHE_MAX_SIZE` (default 256).
+
+```bash
+curl -sS -X POST http://localhost:8080/api/v1/risk/score \
+  -H "X-Project-Key: demo-project-key-2026" \
+  -H "Content-Type: application/json" \
+  -d '{"address":"0x6ac359924348dd492a7751af122d781db984b70a"}'
+```
+
+| Field | Meaning |
+|-------|---------|
+| `riskModelVersion` | Frozen model id (`risk-1.0`) |
+| `score` | Live clamped 0–100 from `RiskEngine.complete` (same finish step as ingest persist) |
+| `rawScore` | Uncapped sum of reason weights |
+| `reasons` | Code → points |
+| `bytecodeHash` / `cloneCount` | Creation fingerprint + 7-day clone count |
+| `fundingHops` / `fundingSource*` / `blacklistedFunding` | Genesis Trace (SQL). Point lookup **always** traces; ingest may skip when score ≤ 40 or catch-up lag is high, so persisted `whale_transactions.risk_score` can be **lower** than this live `score` for the same hash |
+| `asOfBlock` / `computedAt` | Audit cursor |
+| `coverage` | `indexed` (a whale row was used as context) · `partial` (RPC or genesis only) · `unknown`. `indexed` does **not** mean `score` equals the stored ingest score |
+
+Case fixtures: deployer `0x6ac359924348dd492a7751af122d781db984b70a` (Case #001); bytecode `87192e36234d9184a43f740488a3a0c663e86a192e001cbabde48f000c0a1511` (Case #002).
+
+Admin create/update accepts `plan` (`BUILDER` \| `DESK` \| `PROTOCOL`) and optional quota overrides (`dailyRequestQuota`, `watchlistLimit`).
 
 ### Admin APIs
 

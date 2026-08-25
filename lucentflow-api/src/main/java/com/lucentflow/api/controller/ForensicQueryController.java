@@ -48,6 +48,9 @@ public class ForensicQueryController {
     private static final int DEFAULT_PAGE = 0;
     private static final int DEFAULT_SIZE = 20;
     private static final int MAX_SIZE = 100;
+    static final String HEADER_EXPORT_MAX_ROWS = "X-LucentFlow-Export-Max-Rows";
+    static final String HEADER_EXPORT_MATCHED = "X-LucentFlow-Export-Matched";
+    static final String HEADER_EXPORT_TRUNCATED = "X-LucentFlow-Export-Truncated";
     private static final DateTimeFormatter EXPORT_FILENAME_TIME =
             DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC);
 
@@ -93,19 +96,22 @@ public class ForensicQueryController {
         Page<ForensicEventDTO> result = forensicQueryService.queryEvents(
                 minRiskScore, maxRiskScore, address, bytecodeHash, reason, effectiveProjectId, pageable
         );
-        return ResponseEntity.ok(result);
+        return ResponseEntity.ok()
+                .header("X-LucentFlow-Scope", forensicQueryService.watchlistScope(effectiveProjectId))
+                .body(result);
     }
 
     @GetMapping(value = "/events/export/json", produces = MediaType.APPLICATION_JSON_VALUE)
-    @Transactional(readOnly = true)
-    @Operation(summary = "Export forensic events as JSON", description = "Stream filtered forensic events as JSON array")
+    @Operation(summary = "Export forensic events as JSON", description = "Stream filtered forensic events as a JSON array, capped by export-max-rows (default 10000)")
     public ResponseEntity<StreamingResponseBody> exportForensicEventsAsJson(
             @RequestParam(required = false) Integer minRiskScore,
             @RequestParam(required = false) Integer maxRiskScore,
             @RequestParam(required = false) String address,
             @RequestParam(required = false) String bytecodeHash,
             @RequestParam(required = false) String reason,
-            @RequestParam(required = false) Long projectId
+            @RequestParam(required = false) Long projectId,
+            @Parameter(description = "Max rows to stream, capped by server export-max-rows")
+            @RequestParam(required = false) Integer maxRows
     ) {
         if (minRiskScore != null && maxRiskScore != null && minRiskScore > maxRiskScore) {
             return ResponseEntity.badRequest().build();
@@ -114,26 +120,35 @@ public class ForensicQueryController {
         if (projectId != null && effectiveProjectId == null) {
             return ResponseEntity.status(403).build();
         }
+        int rowLimit = forensicQueryService.resolveExportRowLimit(maxRows);
+        long matched = forensicQueryService.countEvents(
+                minRiskScore, maxRiskScore, address, bytecodeHash, reason, effectiveProjectId);
         String filename = "lucentflow-forensics-" + EXPORT_FILENAME_TIME.format(Instant.now()) + ".json";
         StreamingResponseBody body = outputStream -> executeOnVirtualThread(() ->
-                forensicQueryService.exportJson(minRiskScore, maxRiskScore, address, bytecodeHash, reason, effectiveProjectId, outputStream));
+                forensicQueryService.exportJson(
+                        minRiskScore, maxRiskScore, address, bytecodeHash, reason, effectiveProjectId, rowLimit, outputStream));
 
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .header("X-LucentFlow-Scope", forensicQueryService.watchlistScope(effectiveProjectId))
+                .header(HEADER_EXPORT_MAX_ROWS, Integer.toString(rowLimit))
+                .header(HEADER_EXPORT_MATCHED, Long.toString(matched))
+                .header(HEADER_EXPORT_TRUNCATED, Boolean.toString(matched > rowLimit))
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(body);
     }
 
     @GetMapping(value = "/events/export/csv", produces = "text/csv")
-    @Transactional(readOnly = true)
-    @Operation(summary = "Export forensic events as CSV", description = "Stream filtered forensic events as CSV with UTF-8 BOM")
+    @Operation(summary = "Export forensic events as CSV", description = "Stream filtered forensic events as CSV with UTF-8 BOM, capped by export-max-rows (default 10000)")
     public ResponseEntity<StreamingResponseBody> exportForensicEventsAsCsv(
             @RequestParam(required = false) Integer minRiskScore,
             @RequestParam(required = false) Integer maxRiskScore,
             @RequestParam(required = false) String address,
             @RequestParam(required = false) String bytecodeHash,
             @RequestParam(required = false) String reason,
-            @RequestParam(required = false) Long projectId
+            @RequestParam(required = false) Long projectId,
+            @Parameter(description = "Max rows to stream, capped by server export-max-rows")
+            @RequestParam(required = false) Integer maxRows
     ) {
         if (minRiskScore != null && maxRiskScore != null && minRiskScore > maxRiskScore) {
             return ResponseEntity.badRequest().build();
@@ -142,12 +157,20 @@ public class ForensicQueryController {
         if (projectId != null && effectiveProjectId == null) {
             return ResponseEntity.status(403).build();
         }
+        int rowLimit = forensicQueryService.resolveExportRowLimit(maxRows);
+        long matched = forensicQueryService.countEvents(
+                minRiskScore, maxRiskScore, address, bytecodeHash, reason, effectiveProjectId);
         String filename = "lucentflow-forensics-" + EXPORT_FILENAME_TIME.format(Instant.now()) + ".csv";
         StreamingResponseBody body = outputStream -> executeOnVirtualThread(() ->
-                forensicQueryService.exportCsv(minRiskScore, maxRiskScore, address, bytecodeHash, reason, effectiveProjectId, outputStream));
+                forensicQueryService.exportCsv(
+                        minRiskScore, maxRiskScore, address, bytecodeHash, reason, effectiveProjectId, rowLimit, outputStream));
 
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .header("X-LucentFlow-Scope", forensicQueryService.watchlistScope(effectiveProjectId))
+                .header(HEADER_EXPORT_MAX_ROWS, Integer.toString(rowLimit))
+                .header(HEADER_EXPORT_MATCHED, Long.toString(matched))
+                .header(HEADER_EXPORT_TRUNCATED, Boolean.toString(matched > rowLimit))
                 .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
                 .body(body);
     }

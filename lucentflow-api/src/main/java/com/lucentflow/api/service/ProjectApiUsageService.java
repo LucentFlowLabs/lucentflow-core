@@ -4,24 +4,20 @@ import com.lucentflow.api.dto.ApiUsageDailyDTO;
 import com.lucentflow.api.dto.ApiUsageSummaryDTO;
 import com.lucentflow.common.entity.ProjectApiUsage;
 import com.lucentflow.common.repository.ProjectApiUsageRepository;
-import jakarta.annotation.PreDestroy;
+import com.lucentflow.common.usage.DailyApiUsageLedger;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
- * Records and queries per-project API usage counters.
+ * Queries per-project API usage counters and refunds non-2xx daily reservations.
  *
  * @author ArchLucent
  * @since 1.0
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProjectApiUsageService {
@@ -31,24 +27,15 @@ public class ProjectApiUsageService {
     private static final int DEFAULT_DAYS = 30;
 
     private final ProjectApiUsageRepository projectApiUsageRepository;
-    private final ExecutorService usageExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    private final DailyApiUsageLedger dailyApiUsageLedger;
 
-    public void recordRequestAsync(Long projectId) {
-        if (projectId == null) {
-            return;
-        }
-        usageExecutor.submit(() -> {
-            try {
-                recordRequest(projectId);
-            } catch (Exception e) {
-                log.warn("[USAGE] Failed to record request for projectId={} err={}", projectId, e.getMessage());
-            }
-        });
-    }
-
-    @Transactional
-    public void recordRequest(Long projectId) {
-        projectApiUsageRepository.incrementDailyCount(projectId);
+    /**
+     * Refund a reserved daily admit after a non-2xx response.
+     *
+     * @param projectId tenant id
+     */
+    public void releaseReservation(Long projectId) {
+        dailyApiUsageLedger.release(projectId);
     }
 
     @Transactional(readOnly = true)
@@ -77,10 +64,5 @@ public class ProjectApiUsageService {
             return DEFAULT_DAYS;
         }
         return Math.min(MAX_DAYS, Math.max(MIN_DAYS, days));
-    }
-
-    @PreDestroy
-    void shutdownUsageExecutor() {
-        usageExecutor.close();
     }
 }

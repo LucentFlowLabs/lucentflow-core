@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.web3j.protocol.core.methods.response.Transaction;
 
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,7 +33,7 @@ class TransactionPipeTest {
             transactionPipe.push(mock(Transaction.class));
         }
 
-        List<Transaction> batch = transactionPipe.drainBatch(7);
+        List<PipedTransaction> batch = transactionPipe.drainBatch(7);
         
         assertThat(batch).hasSize(7);
         assertThat(transactionPipe.size()).isEqualTo(3);
@@ -40,7 +41,7 @@ class TransactionPipeTest {
 
     @Test
     void shouldReturnEmptyListWhenDrainingEmptyQueue() {
-        List<Transaction> batch = transactionPipe.drainBatch(10);
+        List<PipedTransaction> batch = transactionPipe.drainBatch(10);
         assertThat(batch).isEmpty();
     }
 
@@ -87,5 +88,17 @@ class TransactionPipeTest {
 
         assertThat(transactionPipe.drainBatch(10)).hasSize(1);
         assertThat(transactionPipe.hasPending()).isFalse();
+    }
+
+    @Test
+    void push_preservesBlockTimestampOnDrain() throws InterruptedException {
+        Transaction mockTx = mock(Transaction.class);
+        Instant blockTime = Instant.ofEpochSecond(1_672_531_200L);
+
+        transactionPipe.push(mockTx, blockTime);
+
+        PipedTransaction piped = transactionPipe.drainBatch(1).getFirst();
+        assertThat(piped.transaction()).isSameAs(mockTx);
+        assertThat(piped.blockTimestamp()).isEqualTo(blockTime);
     }
 }

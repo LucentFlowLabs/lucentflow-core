@@ -1,10 +1,10 @@
 # LucentFlow Database Schema (Current)
 
-**Status:** Single Flyway baseline **V1** (former V1–V21 history squashed; greenfield only).  
-**Runtime authority:** [`lucentflow-api/src/main/resources/db/migration/V1__init_schema.sql`](../../lucentflow-api/src/main/resources/db/migration/V1__init_schema.sql)  
+**Status:** Flyway **V1** baseline plus **V2** project plan/quota columns.  
+**Runtime authority:** [`lucentflow-api/src/main/resources/db/migration/`](../../lucentflow-api/src/main/resources/db/migration/)  
 **Docs mirror:** [`schema_current.sql`](schema_current.sql)
 
-Further schema changes: add `V2__...sql` (and refresh this page).
+Further schema changes: add `V3__...sql` (and refresh this page).
 
 ---
 
@@ -94,7 +94,7 @@ Prefer PostgreSQL `ON CONFLICT` for high-throughput writers:
 |-------|-----------------|----------------|
 | `whale_transactions` | `(hash)` | `DO UPDATE` enrichment columns |
 | `funding_edges` | `(funder, funded, hop_layer)` | `DO NOTHING` |
-| `project_api_usage` | `(project_id, usage_date)` | increment `request_count` |
+| `project_api_usage` | `(project_id, usage_date)` | increment `request_count` if under quota; refund on non-2xx |
 | `api_rate_limit_buckets` | `(bucket_key, epoch_minute)` | increment `request_count` |
 | `worker_leases` | `(lease_name)` | conditional reclaim / renew |
 
@@ -102,8 +102,8 @@ Prefer PostgreSQL `ON CONFLICT` for high-throughput writers:
 
 - **Scoped:** `watchlist`, `alert_rules` (1:1), `project_api_usage`, API auth via `projects.api_key_hash`.
 - **Shared:** whale facts, funding graph, entity tags, sync/lease/rate tables.
-- Forensics: empty project watchlist ⇒ empty result set.
-- Topology API today queries global `funding_edges` by address (no watchlist gate).
+- Forensics: empty project watchlist ⇒ empty result set (`X-LucentFlow-Scope: watchlist-empty`).
+- Topology API is watchlist-gated: addresses not on the project list return empty edges (`scope=watchlist-miss`). Point-lookup risk scores use `POST /api/v1/risk/score` and do not read the global graph through topology.
 - No bootstrap plaintext API key in V1; create tenants via Admin API or [`demo_setup.sql`](../../lucentflow-api/src/main/resources/db/demo_setup.sql) (local only).
 
 ### Dual-write labels
@@ -194,6 +194,9 @@ Prefer PostgreSQL `ON CONFLICT` for high-throughput writers:
 | `webhook_url` | `VARCHAR(1024)` | |
 | `webhook_secret` | `VARCHAR(256)` | plaintext; NULL → global fallback |
 | `is_active` | `BOOLEAN` | DEFAULT TRUE |
+| `plan` | `VARCHAR(32)` | `BUILDER` / `DESK` / `PROTOCOL` (CHECK) |
+| `daily_request_quota` | `INT` | DEFAULT 2000; `0` disables the daily cap |
+| `watchlist_limit` | `INT` | DEFAULT 50; `0` disables the address cap |
 | `created_at` | `TIMESTAMPTZ` | |
 
 ### `watchlist`

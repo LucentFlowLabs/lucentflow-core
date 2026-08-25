@@ -11,6 +11,9 @@ public record ProjectUpdateRequest(
         String name,
         String webhookUrl,
         String webhookSecret,
-        Boolean isActive
+        Boolean isActive,
+        String plan,
+        Integer dailyRequestQuota,
+        Integer watchlistLimit
 ) {
 }

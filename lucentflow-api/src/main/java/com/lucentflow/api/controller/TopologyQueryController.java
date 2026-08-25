@@ -4,7 +4,9 @@ import com.lucentflow.api.config.ConditionalOnApiEnabled;
 
 import com.lucentflow.analyzer.service.FundingTopologyService;
 import com.lucentflow.api.dto.FundingEdgeDTO;
+import com.lucentflow.api.security.ProjectContext;
 import com.lucentflow.common.entity.FundingEdge;
+import com.lucentflow.common.repository.WatchlistRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -37,6 +39,7 @@ import java.util.Map;
 public class TopologyQueryController {
 
     private final FundingTopologyService fundingTopologyService;
+    private final WatchlistRepository watchlistRepository;
 
     @GetMapping("/{address}")
     @Operation(summary = "List inbound/outbound funding edges for an address")
@@ -47,7 +50,20 @@ public class TopologyQueryController {
         if (address == null || address.isBlank()) {
             return ResponseEntity.badRequest().build();
         }
+        Long projectId = ProjectContext.getProjectId();
+        if (projectId == null) {
+            return ResponseEntity.status(401).build();
+        }
         String normalized = address.trim().toLowerCase(Locale.ROOT);
+        if (!watchlistRepository.existsByAddressAndProjectId(normalized, projectId)) {
+            return ResponseEntity.ok(Map.of(
+                    "address", normalized,
+                    "inbound", List.of(),
+                    "outbound", List.of(),
+                    "backend", "postgres-funding-edges",
+                    "scope", "watchlist-miss"
+            ));
+        }
         String dir = direction == null ? "both" : direction.trim().toLowerCase(Locale.ROOT);
         List<FundingEdgeDTO> inbound = List.of();
         List<FundingEdgeDTO> outbound = List.of();
@@ -61,7 +77,8 @@ public class TopologyQueryController {
                 "address", normalized,
                 "inbound", inbound,
                 "outbound", outbound,
-                "backend", "postgres-funding-edges"
+                "backend", "postgres-funding-edges",
+                "scope", "watchlist"
         ));
     }
 

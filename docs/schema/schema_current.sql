@@ -127,7 +127,11 @@ CREATE TABLE IF NOT EXISTS projects (
     webhook_url     VARCHAR(1024),
     webhook_secret  VARCHAR(256),
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    plan            VARCHAR(32) NOT NULL DEFAULT 'BUILDER',
+    daily_request_quota INT NOT NULL DEFAULT 2000,
+    watchlist_limit INT NOT NULL DEFAULT 50,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_projects_plan CHECK (plan IN ('BUILDER', 'DESK', 'PROTOCOL'))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_projects_api_key_hash ON projects (api_key_hash);

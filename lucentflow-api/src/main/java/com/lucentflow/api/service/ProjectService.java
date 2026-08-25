@@ -8,6 +8,7 @@ import com.lucentflow.api.dto.ProjectUpdateRequest;
 import com.lucentflow.api.util.ProjectApiKeyGenerator;
 import com.lucentflow.common.entity.AlertRule;
 import com.lucentflow.common.entity.Project;
+import com.lucentflow.common.plan.ProjectPlan;
 import com.lucentflow.common.repository.AlertRuleRepository;
 import com.lucentflow.common.repository.ProjectRepository;
 import lombok.RequiredArgsConstructor;
@@ -57,6 +58,13 @@ public class ProjectService {
         }
 
         String plaintextKey = generateUniqueApiKey();
+        String plan = ProjectPlan.normalize(request.plan());
+        int dailyQuota = request.dailyRequestQuota() != null
+                ? Math.max(0, request.dailyRequestQuota())
+                : ProjectPlan.defaultDailyRequestQuota(plan);
+        int watchlistLimit = request.watchlistLimit() != null
+                ? Math.max(0, request.watchlistLimit())
+                : ProjectPlan.defaultWatchlistLimit(plan);
         Project project = Project.builder()
                 .name(name)
                 .apiKeyHash(ProjectApiKeyGenerator.hash(plaintextKey))
@@ -64,6 +72,9 @@ public class ProjectService {
                 .webhookUrl(normalizeWebhookUrl(request.webhookUrl()))
                 .webhookSecret(normalizeWebhookSecret(request.webhookSecret()))
                 .isActive(Boolean.TRUE)
+                .plan(plan)
+                .dailyRequestQuota(dailyQuota)
+                .watchlistLimit(watchlistLimit)
                 .build();
         Project saved = projectRepository.save(project);
 
@@ -106,6 +117,22 @@ public class ProjectService {
         }
         if (request.isActive() != null) {
             existing.setIsActive(request.isActive());
+        }
+        if (request.plan() != null && !request.plan().isBlank()) {
+            String plan = ProjectPlan.normalize(request.plan());
+            existing.setPlan(plan);
+            if (request.dailyRequestQuota() == null) {
+                existing.setDailyRequestQuota(ProjectPlan.defaultDailyRequestQuota(plan));
+            }
+            if (request.watchlistLimit() == null) {
+                existing.setWatchlistLimit(ProjectPlan.defaultWatchlistLimit(plan));
+            }
+        }
+        if (request.dailyRequestQuota() != null) {
+            existing.setDailyRequestQuota(Math.max(0, request.dailyRequestQuota()));
+        }
+        if (request.watchlistLimit() != null) {
+            existing.setWatchlistLimit(Math.max(0, request.watchlistLimit()));
         }
 
         Project saved = projectRepository.save(existing);
@@ -154,6 +181,9 @@ public class ProjectService {
                 project.getWebhookUrl(),
                 secretConfigured,
                 project.getIsActive(),
+                project.getPlan(),
+                project.getDailyRequestQuota(),
+                project.getWatchlistLimit(),
                 project.getCreatedAt()
         );
     }

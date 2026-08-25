@@ -96,25 +96,24 @@ public class WhaleTransaction {
     @Column(name = "funding_source_tag", length = 100)
     private String fundingSourceTag;
     
+    /**
+     * Funding-origin classification from genesis trace (CEX / mixer / etc.).
+     * Not a score band; {@link #setRiskScore(Integer)} must not remap this field.
+     */
     @Column(name = "rug_risk_level", length = 20)
     private String rugRiskLevel;
 
     @Column(name = "risk_score")
     private Integer riskScore;
 
+    /**
+     * Sets the 0–100 composite risk score only.
+     * Leaves {@code rugRiskLevel} unchanged so genesis funding-origin is preserved.
+     *
+     * @param riskScore composite score, or {@code null} to clear
+     */
     public void setRiskScore(Integer riskScore) {
         this.riskScore = riskScore;
-        if (riskScore != null) {
-            if (riskScore <= 30) {
-                this.rugRiskLevel = "LOW";
-            } else if (riskScore <= 60) {
-                this.rugRiskLevel = "MEDIUM";
-            } else if (riskScore <= 80) {
-                this.rugRiskLevel = "HIGH";
-            } else {
-                this.rugRiskLevel = "CRITICAL";
-            }
-        }
     }
 
     @Convert(converter = RiskReasonsJsonConverter.class)

@@ -36,22 +36,18 @@
             <version>1.18.30</version>
             <scope>provided</scope>
         </dependency>
-        <!-- BIP-39 Mnemonic Support -->
+        <!-- BIP-39 Mnemonic Support; versions from parent web3j.version (4.12.0) -->
         <dependency>
             <groupId>org.web3j</groupId>
             <artifactId>core</artifactId>
-            <version>4.10.0</version>
         </dependency>
-        <!-- Additional Web3j dependencies for complete functionality -->
         <dependency>
             <groupId>org.web3j</groupId>
             <artifactId>utils</artifactId>
-            <version>4.10.0</version>
         </dependency>
         <dependency>
             <groupId>org.web3j</groupId>
             <artifactId>crypto</artifactId>
-            <version>4.10.0</version>
         </dependency>
         <dependency>
             <groupId>org.bitcoinj</groupId>

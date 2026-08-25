@@ -12,8 +12,21 @@ This is the on-demand playbook (routing + checklist). Non-negotiable coding rule
 2. Name the **one module** that should change. If two modules must move together, say why.
 3. Open the canonical files below **before** editing. Prefer reading over guessing.
 4. Chat in Chinese; code and comments in English (`AGENTS.md`).
+5. **Surface the card.** The first reply after `/process` / `@PROCESS.md` must include the filled-in **会话清单** below. Do not follow this section only in private. Do not paste the rest of this file. If the operator gave no task yet, still emit the card with 目标/模块 as `待指定`.
 
 Stop and ask only when a product decision is required (auth model, public API contract, schema squash). Implementation details: read the code.
+
+### 会话清单 (opening card)
+
+```text
+会话清单
+- 目标：<one sentence>
+- 模块：<one Maven module; if two, why>
+- 先读：<canonical files, or 待任务指定>
+- 硬协议：checkpoint id=1 · 原生 UPSERT · 429 不切备份 · 告警仅成功 UPSERT 后
+- 本轮不做：扩范围 / 顺手重构 / 未要求的 markdown / 自验收
+- 验收门：操作员调 /test → /architect-review → /accept
+```
 
 ---
 

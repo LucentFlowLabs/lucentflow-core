@@ -2,7 +2,7 @@ package com.lucentflow.indexer.source;
 
 import com.lucentflow.common.entity.SyncStatus;
 import com.lucentflow.common.pipeline.TransactionPipe;
-import com.lucentflow.common.utils.Erc20Decoder;
+import com.lucentflow.common.pipeline.WhaleIngressFilter;
 import com.lucentflow.indexer.control.AdaptiveBackpressureController;
 import com.lucentflow.indexer.config.IndexerRpcProfile;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
@@ -25,6 +25,7 @@ import org.web3j.protocol.core.methods.response.TransactionReceipt;
 import org.web3j.exceptions.MessageDecodingException;
 
 import java.math.BigInteger;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Callable;
@@ -68,9 +69,6 @@ public class BaseBlockSource implements BlockSourcePort {
     private final ExecutorService rpcExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     // Legacy circuit breaker is replaced by RpcConcurrencyGovernor COOLING_DOWN state.
-
-    // Whale threshold constant for efficiency
-    private static final BigInteger WHALE_THRESHOLD = com.lucentflow.common.utils.EthUnitConverter.etherStringToWei("10");
 
     private final int rpcBlockTimeoutSeconds;
     private final int rpcReceiptTimeoutSeconds;
@@ -639,12 +637,12 @@ public class BaseBlockSource implements BlockSourcePort {
                 .map(txResult -> (Transaction) txResult.get())
                 .toList();
         
-        // Push whale-sized transfers and contract deployments to TransactionPipe (downstream applies finer rules)
+        // Same ingress rules as WhaleAnalysisWorker (WhaleIngressFilter).
+        Instant blockTime = blockTimestamp(block);
         for (Transaction tx : transactions) {
-            if (isWhaleTransaction(tx)) {
+            if (WhaleIngressFilter.matches(tx)) {
                 try {
-                    // Push the original Web3j Transaction to pipe (not WhaleTransaction)
-                    transactionPipe.push(tx);
+                    transactionPipe.push(tx, blockTime);
                     log.debug("Pushed whale transaction to pipe: {}", tx.getHash());
                 } catch (InterruptedException e) {
                     log.error("Interrupt detected while pushing transaction {} to pipe. Restoring interrupt status...", tx.getHash());
@@ -657,31 +655,12 @@ public class BaseBlockSource implements BlockSourcePort {
         
         return transactions;
     }
-    
-    /**
-     * Indexer ingress filter: pass high-value transfers or contract creations to the pipe.
-     * Contract deployments typically have value 0; they must not be dropped here or rug analysis starves.
-     *
-     * @param tx Transaction to check
-     * @return true if value &gt; 10 ETH or contract creation ({@code to} absent)
-     */
-    private boolean isWhaleTransaction(Transaction tx) {
-        if (tx == null) {
-            return false;
+
+    private static Instant blockTimestamp(EthBlock.Block block) {
+        if (block == null || block.getTimestamp() == null) {
+            return Instant.now();
         }
-        String to = tx.getTo();
-        boolean isContractCreation = to == null || to.trim().isEmpty();
-        if (isContractCreation) {
-            return true;
-        }
-        // Module 3: candidate ERC-20 interactions with tracked Base core tokens (decoded from receipt downstream).
-        if (Erc20Decoder.isCoreTokenContract(to)) {
-            return true;
-        }
-        if (tx.getValue() == null) {
-            return false;
-        }
-        return tx.getValue().compareTo(WHALE_THRESHOLD) > 0;
+        return Instant.ofEpochSecond(block.getTimestamp().longValue());
     }
     
     /**

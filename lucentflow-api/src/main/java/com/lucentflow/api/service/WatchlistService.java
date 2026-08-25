@@ -46,6 +46,10 @@ public class WatchlistService {
         if (watchlistRepository.existsByAddressAndProjectId(normalizedAddress, projectId)) {
             throw new IllegalArgumentException("Address already exists in project watchlist");
         }
+        int limit = project.getWatchlistLimit() == null ? 0 : project.getWatchlistLimit();
+        if (limit > 0 && watchlistRepository.countByProjectId(projectId) >= limit) {
+            throw new IllegalArgumentException("Watchlist limit exceeded");
+        }
         Watchlist item = Watchlist.builder()
                 .address(normalizedAddress)
                 .label(safeTrim(request.label()))

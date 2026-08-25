@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -28,14 +29,20 @@ public class AddressLabeler {
     private static final Map<String, String> ADDRESS_LABELS = new ConcurrentHashMap<>();
     
     static {
-        // Initialize known addresses with their labels
-        ADDRESS_LABELS.put("0x49048044D57e1C23A120ab3913D2258d96af6E56", "Coinbase Proxy");
-        ADDRESS_LABELS.put("0x26213694093010b985442A2338BCe7E690558133", "Uniswap V3 Router");
-        
-        // Add more known addresses for MVP
-        ADDRESS_LABELS.put("0x4200000000000000000000000000000000000006", "WETH");
-        ADDRESS_LABELS.put("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "BaseSwap Router");
-        ADDRESS_LABELS.put("0x327Df1E0e0B5A90D5A604B2C45B6c9b8F5E3f4B1", "Aerodrome Router");
+        putLabel("0x49048044D57e1C23A120ab3913D2258d96af6E56", "Coinbase Proxy");
+        putLabel("0x26213694093010b985442A2338BCe7E690558133", "Uniswap V3 Router");
+        putLabel("0x4200000000000000000000000000000000000006", "WETH");
+        putLabel("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "USDC");
+        putLabel("0x327Df1E6bcbf968d84a78cE91f97FAbDc9d267cb", "Aerodrome Router");
+    }
+
+    private static void putLabel(String address, String label) {
+        ADDRESS_LABELS.put(normalizeKey(address), label);
+    }
+
+    /** Store and look up keys lowercase with {@link Locale#ROOT}. */
+    private static String normalizeKey(String address) {
+        return address.toLowerCase(Locale.ROOT);
     }
     
     /**
@@ -48,8 +55,7 @@ public class AddressLabeler {
             return "CONTRACT_CREATION";
         }
         
-        String normalizedAddress = address.toLowerCase();
-        String label = ADDRESS_LABELS.get(normalizedAddress);
+        String label = ADDRESS_LABELS.get(normalizeKey(address));
         
         if (label != null) {
             return label;
@@ -99,7 +105,7 @@ public class AddressLabeler {
      * @return true if exchange
      */
     private boolean isExchange(String label) {
-        return label.contains("Coinbase") || label.contains("Exchange") || label.contains("Router");
+        return label.contains("Coinbase") || label.contains("Exchange");
     }
     
     /**
@@ -108,8 +114,9 @@ public class AddressLabeler {
      * @return true if DeFi
      */
     private boolean isDeFi(String label) {
-        return label.contains("Uniswap") || label.contains("Aerodrome") || 
-               label.contains("BaseSwap") || label.contains("WETH");
+        return label.contains("Uniswap") || label.contains("Aerodrome")
+                || label.contains("BaseSwap") || label.contains("WETH")
+                || label.contains("USDC");
     }
     
     /**
@@ -147,7 +154,7 @@ public class AddressLabeler {
      * @param label Address label
      */
     public void addAddressLabel(String address, String label) {
-        ADDRESS_LABELS.put(address.toLowerCase(), label);
+        ADDRESS_LABELS.put(normalizeKey(address), label);
         log.info("Added address label: {} -> {}", address, label);
     }
 }

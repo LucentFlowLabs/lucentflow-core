@@ -56,6 +56,11 @@ lucentflow:
     base-url: ${BASESCAN_BASE_URL:https://api-v2.basescan.org/api}
   indexer:
     start-block: ${LUCENTFLOW_INDEXER_START_BLOCK:}
+  analyzer:
+    batch-size: ${LUCENTFLOW_ANALYZER_BATCH_SIZE:20}
+    concurrency: ${LUCENTFLOW_ANALYZER_CONCURRENCY:2}
+    # Skip rug enrich and genesis deep-trace for lower-risk whales when (head - lastScanned) exceeds this.
+    catch-up-lag-blocks: ${LUCENTFLOW_ANALYZER_CATCH_UP_LAG_BLOCKS:500}
   telegram:
     bot-token: ${TELEGRAM_BOT_TOKEN:}
     chat-id: ${TELEGRAM_CHAT_ID:}
@@ -65,16 +70,25 @@ lucentflow:
     url: ${LUCENTFLOW_WEBHOOK_URL:}
     secret-token: ${LUCENTFLOW_WEBHOOK_SECRET_TOKEN:}
     connect-timeout-ms: ${LUCENTFLOW_WEBHOOK_CONNECT_TIMEOUT_MS:5000}
+    bulkhead-permits: ${LUCENTFLOW_WEBHOOK_BULKHEAD_PERMITS:50}
+    bulkhead-acquire-timeout-ms: ${LUCENTFLOW_WEBHOOK_BULKHEAD_ACQUIRE_TIMEOUT_MS:10000}
   alert:
     global-risk-threshold: ${LUCENTFLOW_ALERT_GLOBAL_RISK_THRESHOLD:70}
   admin:
     api-key: ${LUCENTFLOW_ADMIN_API_KEY:}
   api:
-    # 0 disables the limit. Daily quota is checked against project_api_usage for CURRENT_DATE.
-    daily-request-quota: ${LUCENTFLOW_API_DAILY_REQUEST_QUOTA:100000}
+    # 0 disables the fallback. Live enforcement uses projects.daily_request_quota (BUILDER default 2000).
+    daily-request-quota: ${LUCENTFLOW_API_DAILY_REQUEST_QUOTA:2000}
     rate-limit-per-minute: ${LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE:120}
     # Soft throttle for unauthenticated public whales/sync endpoints (per client IP).
     public-rate-limit-per-minute: ${LUCENTFLOW_API_PUBLIC_RATE_LIMIT_PER_MINUTE:60}
+    risk-score:
+      max-concurrent: ${LUCENTFLOW_API_RISK_SCORE_MAX_CONCURRENT:4}
+      timeout-ms: ${LUCENTFLOW_API_RISK_SCORE_TIMEOUT_MS:8000}
+      cache-ttl-ms: ${LUCENTFLOW_API_RISK_SCORE_CACHE_TTL_MS:60000}
+      cache-max-size: ${LUCENTFLOW_API_RISK_SCORE_CACHE_MAX_SIZE:256}
+    forensics:
+      export-max-rows: ${LUCENTFLOW_API_FORENSICS_EXPORT_MAX_ROWS:10000}
   runtime:
     # Phase 4 process-split knobs (default: monolith runs both).
     enable-indexer: ${LUCENTFLOW_RUNTIME_ENABLE_INDEXER:true}

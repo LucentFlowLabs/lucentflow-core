@@ -17,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -97,5 +98,28 @@ class ApiKeyInterceptorTest {
 
         assertThat(interceptor.preHandle(request, response, new Object())).isFalse();
         verify(response).sendError(eq(429), eq("Daily request quota exceeded"));
+    }
+
+    @Test
+    void afterCompletion_releasesReservationOnNon2xx() {
+        Project project = Project.builder().id(42L).name("Demo").isActive(true).build();
+        ProjectContext.set(project);
+        when(response.getStatus()).thenReturn(504);
+
+        interceptor.afterCompletion(request, response, new Object(), null);
+
+        verify(projectApiUsageService).releaseReservation(42L);
+        assertThat(ProjectContext.get()).isNull();
+    }
+
+    @Test
+    void afterCompletion_keepsReservationOn2xx() {
+        Project project = Project.builder().id(42L).name("Demo").isActive(true).build();
+        ProjectContext.set(project);
+        when(response.getStatus()).thenReturn(200);
+
+        interceptor.afterCompletion(request, response, new Object(), null);
+
+        verify(projectApiUsageService, never()).releaseReservation(any());
     }
 }

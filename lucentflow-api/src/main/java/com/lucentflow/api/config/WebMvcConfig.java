@@ -35,7 +35,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/api/v1/watchlist/**",
                         "/api/v1/forensics/**",
                         "/api/v1/alert-rules/**",
-                        "/api/v1/usage/**");
+                        "/api/v1/usage/**",
+                        "/api/v1/risk/**");
 
         // Platform free tier: public whales/sync remain unauthenticated, soft-throttled by IP.
         registry.addInterceptor(publicApiRateLimitInterceptor)

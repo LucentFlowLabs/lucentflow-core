@@ -1,13 +1,12 @@
 package com.lucentflow.api.service;
 
+import com.lucentflow.common.entity.Project;
 import com.lucentflow.common.ratelimit.SharedRateLimitService;
-import com.lucentflow.common.repository.ProjectApiUsageRepository;
-import lombok.extern.slf4j.Slf4j;
+import com.lucentflow.common.repository.ProjectRepository;
+import com.lucentflow.common.usage.DailyApiUsageLedger;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.time.Clock;
-import java.time.LocalDate;
 import java.util.Optional;
 
 /**
@@ -16,54 +15,44 @@ import java.util.Optional;
  * @author ArchLucent
  * @since 1.0
  */
-@Slf4j
 @Service
 public class ProjectApiQuotaService {
 
-    private final ProjectApiUsageRepository projectApiUsageRepository;
+    private final ProjectRepository projectRepository;
     private final SharedRateLimitService sharedRateLimitService;
-    private final Clock clock;
+    private final DailyApiUsageLedger dailyApiUsageLedger;
 
-    private int dailyRequestQuota = 100_000;
+    private int dailyRequestQuotaFallback = 2_000;
     private int rateLimitPerMinute = 120;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectApiQuotaService(
-            ProjectApiUsageRepository projectApiUsageRepository,
-            SharedRateLimitService sharedRateLimitService
+            ProjectRepository projectRepository,
+            SharedRateLimitService sharedRateLimitService,
+            DailyApiUsageLedger dailyApiUsageLedger
     ) {
-        this.projectApiUsageRepository = projectApiUsageRepository;
+        this.projectRepository = projectRepository;
         this.sharedRateLimitService = sharedRateLimitService;
-        this.clock = Clock.systemUTC();
+        this.dailyApiUsageLedger = dailyApiUsageLedger;
     }
 
     static ProjectApiQuotaService forTests(
-            ProjectApiUsageRepository projectApiUsageRepository,
+            ProjectRepository projectRepository,
             SharedRateLimitService sharedRateLimitService,
-            int dailyRequestQuota,
-            int rateLimitPerMinute,
-            Clock clock
+            DailyApiUsageLedger dailyApiUsageLedger,
+            int dailyRequestQuotaFallback,
+            int rateLimitPerMinute
     ) {
         ProjectApiQuotaService service = new ProjectApiQuotaService(
-                projectApiUsageRepository, sharedRateLimitService, clock);
-        service.dailyRequestQuota = Math.max(0, dailyRequestQuota);
+                projectRepository, sharedRateLimitService, dailyApiUsageLedger);
+        service.dailyRequestQuotaFallback = Math.max(0, dailyRequestQuotaFallback);
         service.rateLimitPerMinute = Math.max(0, rateLimitPerMinute);
         return service;
     }
 
-    private ProjectApiQuotaService(
-            ProjectApiUsageRepository projectApiUsageRepository,
-            SharedRateLimitService sharedRateLimitService,
-            Clock clock
-    ) {
-        this.projectApiUsageRepository = projectApiUsageRepository;
-        this.sharedRateLimitService = sharedRateLimitService;
-        this.clock = clock;
-    }
-
-    @Value("${lucentflow.api.daily-request-quota:100000}")
-    void setDailyRequestQuota(int dailyRequestQuota) {
-        this.dailyRequestQuota = Math.max(0, dailyRequestQuota);
+    @Value("${lucentflow.api.daily-request-quota:2000}")
+    void setDailyRequestQuotaFallback(int dailyRequestQuota) {
+        this.dailyRequestQuotaFallback = Math.max(0, dailyRequestQuota);
     }
 
     @Value("${lucentflow.api.rate-limit-per-minute:120}")
@@ -72,6 +61,8 @@ public class ProjectApiQuotaService {
     }
 
     /**
+     * Atomically reserve a daily admit (and a per-minute permit). Empty means allowed.
+     *
      * @return rejection reason, or empty if the request is allowed
      */
     public Optional<String> evaluate(Long projectId) {
@@ -81,14 +72,20 @@ public class ProjectApiQuotaService {
         if (rateLimitPerMinute > 0 && !tryAcquireRatePermit(projectId)) {
             return Optional.of("Project rate limit exceeded");
         }
-        if (dailyRequestQuota > 0) {
-            long usedToday = projectApiUsageRepository.sumRequestCountByProjectIdAndUsageDate(
-                    projectId, LocalDate.now(clock));
-            if (usedToday >= dailyRequestQuota) {
-                return Optional.of("Daily request quota exceeded");
-            }
+        int dailyQuota = resolveDailyQuota(projectId);
+        if (!dailyApiUsageLedger.tryReserve(projectId, dailyQuota)) {
+            return Optional.of("Daily request quota exceeded");
         }
         return Optional.empty();
+    }
+
+    int resolveDailyQuota(Long projectId) {
+        Optional<Project> project = projectRepository.findById(projectId);
+        if (project.isEmpty()) {
+            return dailyRequestQuotaFallback;
+        }
+        Integer quota = project.get().getDailyRequestQuota();
+        return quota == null ? dailyRequestQuotaFallback : Math.max(0, quota);
     }
 
     boolean tryAcquireRatePermit(Long projectId) {

@@ -1,5 +1,6 @@
 package com.lucentflow.common.ratelimit;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -18,6 +19,11 @@ public class SharedRateLimitService {
     private final JdbcTemplate jdbcTemplate;
     private final Clock clock;
 
+    /**
+     * Production constructor. {@code @Autowired} is required because a package-private
+     * test constructor also exists; Spring otherwise tries a missing no-arg ctor.
+     */
+    @Autowired
     public SharedRateLimitService(JdbcTemplate jdbcTemplate) {
         this(jdbcTemplate, Clock.systemUTC());
     }

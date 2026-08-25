@@ -9,6 +9,9 @@ package com.lucentflow.api.dto;
 public record ProjectCreateRequest(
         String name,
         String webhookUrl,
-        String webhookSecret
+        String webhookSecret,
+        String plan,
+        Integer dailyRequestQuota,
+        Integer watchlistLimit
 ) {
 }

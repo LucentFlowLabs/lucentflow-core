@@ -38,6 +38,14 @@ public class DiscordAlertProvider implements AlertProvider {
         this.webhookUrl = webhookUrl;
     }
 
+    /**
+     * Operator-global Discord webhook from env. Not a per-project channel.
+     */
+    @Override
+    public boolean supportsProjectScopedDispatch() {
+        return false;
+    }
+
     @Override
     public void sendHighRiskAlertAsync(WhaleTransaction tx, AlertDispatchContext context) {
         if (tx == null || webhookUrl == null || webhookUrl.isBlank()) {

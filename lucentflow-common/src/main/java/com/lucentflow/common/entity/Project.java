@@ -13,6 +13,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import com.lucentflow.common.plan.ProjectPlan;
+
 import java.time.Instant;
 
 /**
@@ -61,6 +63,18 @@ public class Project {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 
+    @Column(name = "plan", nullable = false, length = 32)
+    @Builder.Default
+    private String plan = ProjectPlan.BUILDER;
+
+    @Column(name = "daily_request_quota", nullable = false)
+    @Builder.Default
+    private Integer dailyRequestQuota = 2_000;
+
+    @Column(name = "watchlist_limit", nullable = false)
+    @Builder.Default
+    private Integer watchlistLimit = 50;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -71,6 +85,15 @@ public class Project {
         }
         if (isActive == null) {
             isActive = Boolean.TRUE;
+        }
+        if (plan == null || plan.isBlank()) {
+            plan = ProjectPlan.BUILDER;
+        }
+        if (dailyRequestQuota == null) {
+            dailyRequestQuota = ProjectPlan.defaultDailyRequestQuota(plan);
+        }
+        if (watchlistLimit == null) {
+            watchlistLimit = ProjectPlan.defaultWatchlistLimit(plan);
         }
     }
 }

@@ -5,6 +5,7 @@ import com.lucentflow.common.ratelimit.SharedRateLimitService;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -25,6 +26,7 @@ public class PublicApiRateLimitInterceptor implements HandlerInterceptor {
     private final SharedRateLimitService sharedRateLimitService;
     private int rateLimitPerMinute = 60;
 
+    @Autowired
     public PublicApiRateLimitInterceptor(SharedRateLimitService sharedRateLimitService) {
         this.sharedRateLimitService = sharedRateLimitService;
     }
