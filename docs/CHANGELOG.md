@@ -8,7 +8,7 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 
 - **Per-project plans** — Flyway `V2__project_plan_quotas.sql`: `plan`, `daily_request_quota` (BUILDER default 2000), `watchlist_limit` (default 50).
 - **Atomic daily quota** — `DailyApiUsageLedger` reserves with `ON CONFLICT … WHERE request_count < quota`; non-2xx responses refund the admit.
-- **Watchlist cap** — Writes fail when the project address cap is reached.
+- **Watchlist cap** — Writes fail when the project address cap is reached. Occupancy is reserved atomically (`project_watchlist_usage`, Flyway **V3**) with `ON CONFLICT … WHERE address_count < watchlist_limit`; failed inserts and deletes refund the slot.
 - **Topology isolation** — `/forensics/topology/{address}` requires the address on the project watchlist.
 - **Risk Score API** — `POST /api/v1/risk/score` on-demand lookup with clamped 0–100 score, model version, dedicated RPC permits, timeout 504, and short TTL cache. `score` uses `RiskEngine.complete` (same revert/blacklist weights as ingest); point lookup always attempts receipt + genesis, so it can exceed the persisted ingest score.
 - **Forensic scope header** — `X-LucentFlow-Scope: watchlist` or `watchlist-empty`.
@@ -22,6 +22,7 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 - **Risk Score errors** — 400 / 503 / 504 return `{"status","error","message"}` JSON.
 - **Block timestamps on ingest** — `TransactionPipe` carries the producing block time so catch-up whales are not stamped with `Instant.now()`.
 - **Alert rules MockMvc** — GET/PUT `/api/v1/alert-rules` 403/400/200 contract plus upsert cache refresh.
+- **Regression tests** — Catch-up lag fail-open; `shouldAlert` watchlist/score/creation matrix; watchlist `limit=0` and under-cap writes; topology miss/hit (global edges after watchlist gate); Risk Score ignores persisted ingest score; daily-quota SQL `WHERE request_count < ?`; Discord/Telegram blank-config no-op; `RpcFailoverInterceptor` does not fail over on HTTP 429. Flyway IT asserts V1–V3 (plan/quota columns + `project_watchlist_usage`).
 
 ---
 

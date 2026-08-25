@@ -2,6 +2,7 @@ package com.lucentflow.common.usage;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -77,5 +78,18 @@ class DailyApiUsageLedgerTest {
         ledger.release(42L);
 
         verify(jdbcTemplate).update(anyString(), eq(42L), eq(Date.valueOf(LocalDate.of(2026, 7, 13))));
+    }
+
+    @Test
+    void tryReserve_cappedSqlGuardsRequestCount() {
+        Clock clock = Clock.fixed(Instant.parse("2026-07-13T08:00:00Z"), ZoneOffset.UTC);
+        DailyApiUsageLedger ledger = new DailyApiUsageLedger(jdbcTemplate, clock);
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        when(jdbcTemplate.query(sql.capture(), ArgumentMatchers.<ResultSetExtractor<Long>>any(),
+                eq(1L), eq(Date.valueOf(LocalDate.of(2026, 7, 13))), eq(10)))
+                .thenReturn(1L);
+
+        assertThat(ledger.tryReserve(1L, 10)).isTrue();
+        assertThat(sql.getValue()).contains("WHERE project_api_usage.request_count < ?");
     }
 }

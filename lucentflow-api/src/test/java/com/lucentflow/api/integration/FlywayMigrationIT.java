@@ -16,7 +16,7 @@ import java.sql.ResultSet;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Applies the consolidated classpath Flyway baseline (V1) against a real Postgres 16 container.
+ * Applies classpath Flyway V1–V3 (plan/quota + watchlist occupancy) against Postgres 16.
  *
  * @author ArchLucent
  * @since 1.2
@@ -41,23 +41,35 @@ class FlywayMigrationIT {
     }
 
     @Test
-    void migratesConsolidatedV1Baseline() throws Exception {
+    void migratesV1ThroughV3WatchlistOccupancy() throws Exception {
         Flyway flyway = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();
 
         var result = flyway.migrate();
-        assertThat(result.migrationsExecuted).isEqualTo(1);
+        assertThat(result.migrationsExecuted).isEqualTo(3);
 
         MigrationInfo current = flyway.info().current();
         assertThat(current).isNotNull();
-        assertThat(current.getVersion().getVersion()).isEqualTo("1");
+        assertThat(current.getVersion().getVersion()).isEqualTo("3");
 
         try (Connection connection = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {
             try (ResultSet rs = connection.getMetaData().getColumns(null, null, "projects", "webhook_secret")) {
                 assertThat(rs.next()).as("projects.webhook_secret exists").isTrue();
+            }
+            try (ResultSet rs = connection.getMetaData().getColumns(null, null, "projects", "plan")) {
+                assertThat(rs.next()).as("projects.plan exists").isTrue();
+            }
+            try (ResultSet rs = connection.getMetaData().getColumns(null, null, "projects", "daily_request_quota")) {
+                assertThat(rs.next()).as("projects.daily_request_quota exists").isTrue();
+            }
+            try (ResultSet rs = connection.getMetaData().getColumns(null, null, "projects", "watchlist_limit")) {
+                assertThat(rs.next()).as("projects.watchlist_limit exists").isTrue();
+            }
+            try (ResultSet rs = connection.getMetaData().getTables(null, null, "project_watchlist_usage", null)) {
+                assertThat(rs.next()).as("project_watchlist_usage exists").isTrue();
             }
             try (ResultSet rs = connection.getMetaData().getTables(null, null, "worker_leases", null)) {
                 assertThat(rs.next()).as("worker_leases exists").isTrue();

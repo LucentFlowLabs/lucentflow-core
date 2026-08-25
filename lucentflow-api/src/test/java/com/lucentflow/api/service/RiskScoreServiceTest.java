@@ -78,6 +78,8 @@ class RiskScoreServiceTest {
         assertThat(response.coverage()).isEqualTo(RiskScoreService.COVERAGE_INDEXED);
         assertThat(response.address()).isEqualTo(CASE_001_DEPLOYER);
         assertThat(response.reasons()).containsKey("CONTRACT_CREATION");
+        assertThat(response.score()).isNotEqualTo(90);
+        assertThat(response.score()).isEqualTo(30);
     }
 
     @Test

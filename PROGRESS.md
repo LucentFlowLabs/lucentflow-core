@@ -11,7 +11,7 @@
 
 ## 1. Executive Verdict
 
-LucentFlow 已从 Base L2 **链上哨兵**演进为具备 **B2B 多租户产品面** 的主权取证 OS。核心链路——**RPC 拉块 → TransactionPipe → RiskEngine → PostgreSQL → REST/Webhook**——在模块化单体 Fat JAR 中打通；v1.2 的 Project / Watchlist / AlertRule / Usage 与 Flyway **V1** 对齐，商业套餐与配额列在 **V2**。
+LucentFlow 已从 Base L2 **链上哨兵**演进为具备 **B2B 多租户产品面** 的主权取证 OS。核心链路——**RPC 拉块 → TransactionPipe → RiskEngine → PostgreSQL → REST/Webhook**——在模块化单体 Fat JAR 中打通；v1.2 的 Project / Watchlist / AlertRule / Usage 与 Flyway **V1** 对齐，商业套餐与配额列在 **V2**，watchlist 占用计数在 **V3**。
 
 当前定位：**可用的 SaaS MVP（多项目隔离 + 计划配额 + 告警 + 取证查询 + 按需 Risk Score）**。尚非完整 enterprise B2B：无 RBAC / 审计。
 
@@ -19,10 +19,10 @@ LucentFlow 已从 Base L2 **链上哨兵**演进为具备 **B2B 多租户产品�
 |------|------|------|
 | 索引与 checkpoint | ★★★★★ | ID=1 Protocol + DB `CHECK (id = 1)` + 单调 `GREATEST` |
 | 风险分析 / Anti-Rug | ★★★★☆ | RiskEngine.complete 为 ingest/API 共用收尾；点查始终拉 receipt+genesis，ingest 可跳过 |
-| B2B 多租户 API | ★★★★☆ | CRUD / hashed Key / 规则 / V2 plan 配额 / 取证隔离已 wired |
+| B2B 多租户 API | ★★★★☆ | CRUD / hashed Key / 规则 / V2 plan 配额 / V3 watchlist 占用 / 取证隔离已 wired |
 | 告警投递 | ★★★★☆ | HMAC Webhook 按项目；Discord / Telegram 显式 global-only（合并 watchlist 标签） |
-| 安全与运营硬化 | ★★★☆☆ | 双 Key 拦截器 + 分钟桶原子限流 + 日配额原子预占；无 RBAC |
-| 测试与可演进性 | ★★★☆☆ | ~39 个测试类（含 2 个 Testcontainers IT）；缺 shutdown 集成测试 |
+| 安全与运营硬化 | ★★★☆☆ | 双 Key 拦截器 + 分钟桶 / 日配额 / watchlist 占用均为原子预占；无 RBAC |
+| 测试与可演进性 | ★★★☆☆ | ~45 个测试类（含 2 个 Testcontainers IT）；缺 shutdown 集成测试 |
 | 部署形态 | ★★★★☆ | Docker Compose + K8s api/worker 拆分（worker `replicas: 1`）；Neo4j 仅为 compose 占位 |
 
 ---
@@ -100,7 +100,7 @@ flowchart LR
 | Capability | Status | Evidence |
 |------------|--------|----------|
 | Forensic query + JSON/CSV export | ✅ Done | `/api/v1/forensics/**`；空 watchlist → 空结果 + `X-LucentFlow-Scope` |
-| Project-scoped watchlist | ✅ Done | `(project_id, address)` + `WatchlistCacheService`；V2 `watchlist_limit` |
+| Project-scoped watchlist | ✅ Done | `(project_id, address)` + `WatchlistCacheService`；V2 `watchlist_limit`；V3 `project_watchlist_usage` 原子占用 |
 | Per-project alert rules | ✅ Done | `AlertRuleController` / `AlertRuleCacheService` |
 | HMAC project webhooks | ✅ Done | Project URL + optional `webhook_secret`；全局 URL 不再提前 return |
 | Admin project CRUD + key rotate | ✅ Done | `/api/v1/admin/projects`，`X-Admin-Key` |
@@ -109,8 +109,8 @@ flowchart LR
 | Commercial plans | ✅ Done | Flyway **V2** `plan` / `daily_request_quota` / `watchlist_limit`（BUILDER 2000/50，DESK 20000/200，PROTOCOL 100000/1000） |
 | On-demand Risk Score | ✅ Done | `POST /api/v1/risk/score`；`RiskEngine.complete`；点查 fetch 更深（契约已标明） |
 | sync_status singleton | ✅ Done | `CHECK (id = 1)` + poller deletion |
-| Docs / CHANGELOG / demo_setup | ✅ Synced | `docs/schema/SCHEMA_CURRENT.md` 含 V2 |
-| B2B unit tests | ✅ Done | Auth / quota / cache / persist-then-alert / topology miss |
+| Docs / CHANGELOG / demo_setup | ✅ Synced | `docs/schema/SCHEMA_CURRENT.md` 含 V2 + V3 |
+| B2B unit tests | ✅ Done | Auth / quota / cache / persist-then-alert / topology miss+hit |
 | API key at-rest hashing | ✅ Done | SHA-256 `api_key_hash` + prefix |
 | Public `/whales` product decision | ✅ Done | Free tier + IP soft limit |
 
@@ -233,7 +233,9 @@ flowchart LR
 27. **~~Risk Score 内存 cache 无驱逐；4xx/5xx 无 JSON body~~** ✅ Fixed (2026-08-25)  
     Caffeine TTL + max-size；400/503/504 返回 `{status,error,message}`。  
 28. **~~Worker `Instant.now()` 作交易时间戳~~** ✅ Fixed (2026-08-25)  
-    Indexer `push(tx, blockTimestamp)`；analyzer 用 piped 块时间写入 `whale_transactions.timestamp`。
+    Indexer `push(tx, blockTimestamp)`；analyzer 用 piped 块时间写入 `whale_transactions.timestamp`。  
+29. **~~Watchlist count-then-insert~~** ✅ Fixed (2026-08-25)  
+    `WatchlistCapLedger` 原子 UPSERT（`WHERE address_count < watchlist_limit`）；insert 失败与 delete 退回占用。
 
 ---
 
@@ -245,6 +247,7 @@ Former incremental V1–V21 history was **squashed** into a single greenfield ba
 |-----|---------|
 | V1 | Full schema: whale, sync (ID=1), entity_tags, funding_edges, projects (hashed keys), watchlist, alert_rules, usage, worker_leases, api_rate_limit_buckets |
 | V2 | `projects.plan` (`BUILDER` / `DESK` / `PROTOCOL`) + `daily_request_quota` + `watchlist_limit`；`0` 禁用对应上限 |
+| V3 | `project_watchlist_usage` occupancy counter；create 原子预占、delete/失败退回 |
 
 已有行在 V2 中得到 BUILDER 默认值（2000 / 50），不会按历史意图回填更高套餐。
 
@@ -258,7 +261,7 @@ Former incremental V1–V21 history was **squashed** into a single greenfield ba
 | Project | `X-Project-Key` | `/forensics/**`（含 topology）, `/watchlist/**`, `/alert-rules/**`, `/usage/**`, `/risk/**` |
 | Admin | `X-Admin-Key` | `/admin/projects/**`（CRUD, rotate-key, usage, `plan`）, `/admin/backfill` |
 
-配额：`projects.daily_request_quota`（BUILDER 默认 2000）+ `LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`；超限 HTTP 429。Watchlist 写入受 `watchlist_limit` 约束。`LUCENTFLOW_API_DAILY_REQUEST_QUOTA` 仅为行缺失时的 fallback。
+配额：`projects.daily_request_quota`（BUILDER 默认 2000）+ `LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`；超限 HTTP 429。Watchlist 写入受 `watchlist_limit` 约束，占用经 `project_watchlist_usage` 原子 UPSERT。`LUCENTFLOW_API_DAILY_REQUEST_QUOTA` 仅为行缺失时的 fallback。
 
 Demo bootstrap: `lucentflow-api/src/main/resources/db/demo_setup.sql`（本地）。  
 Interactive docs: Swagger UI at `/swagger-ui/index.html`。  
@@ -270,12 +273,13 @@ Product docs: [`docs/API-DOCUMENTATION.md`](docs/API-DOCUMENTATION.md)。
 
 | Module | Test classes | Notes |
 |--------|--------------|-------|
-| common | 10 | Pipe, ingress filter, crypto, lease, shared rate limit, daily usage ledger, `ProjectPlan` |
+| common | 11 | Pipe, ingress filter, crypto, lease, shared rate limit, daily usage ledger, watchlist occupancy ledger, `ProjectPlan` |
 | indexer | 6 | RPC policy, governor, source, transformer, sink UPSERT, checkpoint GREATEST |
-| analyzer | 7 | Webhook gate, AlertService fan-out, persist-then-alert, RiskEngine, AddressLabeler, topology persist |
-| api | 16 | Quota, interceptors, specs, RiskScore, AlertRule MockMvc, Watchlist cap, topology miss, K8s gate, 2× Testcontainers IT |
-| chain-sdk / pipeline-contract | 0 | 429 failover 无专用单测 |
-| **Total** | **~39** | Auth/quota/isolation 有单元覆盖；ITs 覆盖 Flyway + empty-watchlist |
+| analyzer | 11 | Webhook gate, AlertService fan-out, persist-then-alert, catch-up lag, RiskEngine, AddressLabeler, topology persist, shouldAlert 矩阵, Discord/Telegram 空配置 |
+| api | 16 | Quota, interceptors, specs, RiskScore live vs ingest, AlertRule MockMvc, Watchlist 原子 cap/`limit=0`/refund, topology miss+hit, K8s gate, 2× Testcontainers IT（含 V3） |
+| chain-sdk | 1 | `RpcFailoverInterceptor`：429 不切 backup；500 才切 |
+| pipeline-contract | 0 | 端口模块，无运行时逻辑 |
+| **Total** | **~45** | Auth/quota/isolation 有单元覆盖；ITs 覆盖 Flyway V1–V3 + empty-watchlist |
 
 **Still thin:** SmartLifecycle drain 超时窗口。
 
@@ -291,6 +295,7 @@ Closed 2026-07-13（webhook gate、empty watchlist、hashed keys、inactive filt
 | P0 | ~~UPSERT 失败重试或死信（async catch 后不丢批）~~ | ✅ Fixed 2026-08-25 — `persistThenAlertUntilSuccess` |
 | P1 | ~~统一 Worker / Risk Score 评分路径，或在 API 契约中标明差异~~ | ✅ Fixed 2026-08-25 — `RiskEngine.complete` + API 文档标明 live vs ingest fetch |
 | P1 | ~~日配额原子预占（与分钟桶同一 UPSERT 套路）~~ | ✅ Fixed 2026-08-25 — `DailyApiUsageLedger` + 非 2xx refund |
+| P2 | ~~Watchlist cap 原子预占（与日配额同一 UPSERT 套路）~~ | ✅ Fixed 2026-08-25 — `WatchlistCapLedger` + V3 occupancy |
 | P2 | ~~合并 catch-up 500 vs 5000 为单一配置~~ | ✅ Fixed 2026-08-25 — `catch-up-lag-blocks` 默认 500 |
 | P2 | ~~修正 USDC 标签；Router ≠ Exchange~~ | ✅ Fixed 2026-08-25 |
 | P2 | ~~Discord/Telegram 显式 global-only；Webhook bulkhead 不再静默丢~~ | ✅ Fixed 2026-08-25 |
@@ -303,7 +308,7 @@ Closed 2026-07-13（webhook gate、empty watchlist、hashed keys、inactive filt
 
 ## 10. Working Tree Snapshot
 
-审查日 2026-08-25 的工作区相对 2026-07-13 文档增量（部分仍可能未提交）：Flyway **V2** plan/quota、`POST /api/v1/risk/score`、topology watchlist 门控、AddressLabeler `Locale.ROOT` 规范化、Worker 风险因子 memo 缓存、对应单元测试。分支语境仍是 v1.2.0 产品面加固，不是新 major。
+审查日 2026-08-25 的增量：Flyway **V2** plan/quota、**V3** watchlist occupancy、`POST /api/v1/risk/score`、topology watchlist 门控、AddressLabeler `Locale.ROOT` 规范化、Worker 风险因子 memo 缓存、对应单元测试。分支语境仍是 v1.2.0 产品面加固，不是新 major。
 
 剩余焦点：**P4+ Neo4j Cypher sync / worker 多副本 failover 验证**；SmartLifecycle drain 超时窗口次之。
 
@@ -313,9 +318,9 @@ Closed 2026-07-13（webhook gate、empty watchlist、hashed keys、inactive filt
 
 **Framework assessment:** 模块边界对安全哨兵单体足够清晰；`pipeline-contract` 解开了 analyzer 的编译依赖。硬协议（ID=1、UPSERT、VT、429 不切 backup）在代码与 schema 中仍一致。Pipe 运行期不丢；已 drain 批次 UPSERT 失败会重试至成功（关停 last-chance 仍失败则记 hash）。
 
-**Scheme assessment:** hashed Project Key + watchlist 取证 + V2 plan 配额是可用的 SaaS MVP。Risk Score 按设计不走 watchlist（点查任意地址）；`score` 与 ingest 共用 `RiskEngine.complete`，fetch 深度在契约中标明。日配额在 admit 时原子预占，非 2xx 退回。
+**Scheme assessment:** hashed Project Key + watchlist 取证 + V2 plan 配额 + V3 watchlist 占用是可用的 SaaS MVP。Risk Score 按设计不走 watchlist（点查任意地址）；`score` 与 ingest 共用 `RiskEngine.complete`，fetch 深度在契约中标明。日配额与 watchlist 占用均在 admit 时原子预占，失败/非 2xx 退回。
 
-**Overall progress:** Phase 1–3 完成；Phase 4 基础已落地（Discord、backfill、Postgres topology、K8s api/worker、oracle、CI）。Ingress / sink 重试 / 评分收尾 / 日配额预占已对齐。Neo4j 同步与更广价格源仍 iterative。下一步优先修 AddressLabeler 与 catch-up 常量，而不是再铺产品面。
+**Overall progress:** Phase 1–3 完成；Phase 4 基础已落地（Discord、backfill、Postgres topology、K8s api/worker、oracle、CI）。Ingress / sink 重试 / 评分收尾 / 日配额预占 / watchlist 占用预占 / AddressLabeler / catch-up 阈值已对齐。回归单测已补 catch-up、shouldAlert、watchlist 原子 cap、topology 命中全局边、Risk Score 忽略库内 ingest 分、429 不切 backup。下一步是 Neo4j Cypher sync、worker 多副本 failover 验证、SmartLifecycle drain 超时窗口。
 
 ---
 

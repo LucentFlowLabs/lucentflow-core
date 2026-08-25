@@ -175,6 +175,13 @@ CREATE TABLE IF NOT EXISTS project_api_usage (
 CREATE INDEX IF NOT EXISTS idx_project_api_usage_project_date
     ON project_api_usage (project_id, usage_date DESC);
 
+CREATE TABLE IF NOT EXISTS project_watchlist_usage (
+    project_id     BIGINT PRIMARY KEY REFERENCES projects (id),
+    address_count  INT NOT NULL DEFAULT 0,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_project_watchlist_usage_count CHECK (address_count >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS worker_leases (
     lease_name  VARCHAR(64) PRIMARY KEY,
     holder_id   VARCHAR(128) NOT NULL,

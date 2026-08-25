@@ -1,10 +1,10 @@
 # LucentFlow Database Schema (Current)
 
-**Status:** Flyway **V1** baseline plus **V2** project plan/quota columns.  
+**Status:** Flyway **V1** baseline plus **V2** plan/quota columns plus **V3** watchlist occupancy.  
 **Runtime authority:** [`lucentflow-api/src/main/resources/db/migration/`](../../lucentflow-api/src/main/resources/db/migration/)  
 **Docs mirror:** [`schema_current.sql`](schema_current.sql)
 
-Further schema changes: add `V3__...sql` (and refresh this page).
+Further schema changes: add `V4__...sql` (and refresh this page).
 
 ---
 
@@ -14,10 +14,10 @@ Further schema changes: add `V3__...sql` (and refresh this page).
 |-------|--------|--------|
 | Global chain facts | `whale_transactions`, `funding_edges`, `entity_tags` | Shared across all projects |
 | Indexer checkpoint | `sync_status` | Singleton row `id = 1` |
-| Tenant configuration | `projects`, `watchlist`, `alert_rules`, `project_api_usage` | B2B isolation |
+| Tenant configuration | `projects`, `watchlist`, `alert_rules`, `project_api_usage`, `project_watchlist_usage` | B2B isolation |
 | Cluster coordination | `worker_leases`, `api_rate_limit_buckets` | Multi-node lease / rate fairness |
 
-Tenant **read** isolation for forensics is application-layer: intersect global facts with the project’s `watchlist`. Topology and entity tags are intentionally global shared intel unless a future gate is added.
+Tenant **read** isolation for forensics is application-layer: intersect global facts with the project’s `watchlist`. Topology **lookup address** is watchlist-gated; after a hit, returned `funding_edges` are the global graph. Entity tags remain shared intel. Risk Score and the public ETH/USD oracle are not watchlist-gated.
 
 ---
 
@@ -28,6 +28,7 @@ erDiagram
     projects ||--o{ watchlist : "project_id"
     projects ||--o| alert_rules : "project_id UNIQUE"
     projects ||--o{ project_api_usage : "project_id"
+    projects ||--o| project_watchlist_usage : "project_id"
 
     whale_transactions ||..o{ funding_edges : "related_tx_hash soft"
     entity_tags ||..o{ whale_transactions : "tags denormalized"
@@ -50,6 +51,10 @@ erDiagram
         bigint id PK
         bigint project_id FK
         date usage_date
+    }
+    project_watchlist_usage {
+        bigint project_id PK_FK
+        int address_count
     }
     whale_transactions {
         bigint id PK
@@ -211,6 +216,10 @@ One row per project (`project_id` UNIQUE + FK).
 
 Daily counters: UNIQUE `(project_id, usage_date)`.
 
+### `project_watchlist_usage`
+
+Per-project occupancy (`project_id` PK + FK). `WatchlistCapLedger` reserves with `ON CONFLICT … WHERE address_count < watchlist_limit` (same pattern as daily quota). `0` on `projects.watchlist_limit` disables the cap.
+
 ### `worker_leases` / `api_rate_limit_buckets`
 
 Cluster lease and per-minute rate buckets (no retention job in schema).
@@ -219,7 +228,7 @@ Cluster lease and per-minute rate buckets (no retention job in schema).
 
 ## Known design debt (not changed in V1 squash)
 
-1. Topology / oracle endpoints lack watchlist gating (shared intel by design today).
+1. Topology lookup is watchlist-gated; edges after a hit and entity tags remain global shared intel. Public oracle and `POST /risk/score` are not watchlist-gated (by design).
 2. `webhook_secret` stored in plaintext vs hashed API keys.
 3. `api_rate_limit_buckets` grows without TTL / cleanup.
 4. FKs use default `NO ACTION` (no cascade / soft-delete lifecycle for projects).
@@ -232,6 +241,6 @@ Cluster lease and per-minute rate buckets (no retention job in schema).
 ## How to use this doc
 
 - **Onboarding / review:** this page + ER diagram.
-- **Apply schema:** Flyway runs `V1__init_schema.sql` on empty databases.
+- **Apply schema:** Flyway runs `V1__init_schema.sql` then `V2` / `V3` on empty databases.
 - **Local demo tenant:** [`demo_setup.sql`](../../lucentflow-api/src/main/resources/db/demo_setup.sql) after migrate.
-- **Evolve:** add `V2__...`, then update this snapshot.
+- **Evolve:** add `V4__...`, then update this snapshot.

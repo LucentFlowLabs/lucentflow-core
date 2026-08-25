@@ -570,7 +570,13 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         return completeScoringWithOptionalGenesis(enrichedTx, tx);
     }
 
-    private boolean shouldSkipTracingInCatchUp(BigDecimal valueEth) {
+    /**
+     * Catch-up skip for rug/receipt enrich on smaller transfers. Package-visible for tests.
+     *
+     * @param valueEth transfer value; {@code null} never skips
+     * @return {@code true} when catch-up lag is high and value is below 20 ETH
+     */
+    boolean shouldSkipTracingInCatchUp(BigDecimal valueEth) {
         if (valueEth == null) {
             return false;
         }
@@ -583,8 +589,11 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
     /**
      * True when head minus last-scanned exceeds {@link #catchUpLagThresholdBlocks}.
      * Fail-open (false) when lag cannot be read so tracing is not skipped on RPC errors.
+     * Package-visible for tests.
+     *
+     * @return {@code true} only when lag was read and exceeds the configured threshold
      */
-    private boolean isCatchUpMode() {
+    boolean isCatchUpMode() {
         Long lag = getBlockLagCached();
         return lag != null && lag > catchUpLagThresholdBlocks;
     }
@@ -658,9 +667,12 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
 
     /**
      * Catch-up protection: when ingestion lag is high, skip deep origin tracing for lower-risk whales
-     * to keep the TransactionPipe draining and prevent [STALL-ALERT].
+     * to keep the TransactionPipe draining and prevent [STALL-ALERT]. Package-visible for tests.
+     *
+     * @param riskScore engine+revert gate score
+     * @return {@code true} when lag is high and score is below {@link #CATCH_UP_TRACE_MIN_RISK_SCORE}
      */
-    private boolean shouldSkipDeepOriginTrace(int riskScore) {
+    boolean shouldSkipDeepOriginTrace(int riskScore) {
         if (riskScore >= CATCH_UP_TRACE_MIN_RISK_SCORE) {
             return false;
         }

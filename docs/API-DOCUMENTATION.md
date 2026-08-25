@@ -537,10 +537,10 @@ Webhook delivery waits up to `LUCENTFLOW_WEBHOOK_BULKHEAD_ACQUIRE_TIMEOUT_MS` (d
 | Surface | Auth | Limits |
 |---------|------|--------|
 | `/api/v1/whales`, `/whales/stats`, `/sync-status` | **None** (platform free tier) | IP soft rate limit (`LUCENTFLOW_API_PUBLIC_RATE_LIMIT_PER_MINUTE`, default 60; `0` disables) |
-| `/forensics/**`, `/watchlist/**`, `/alert-rules/**`, `/usage/**`, `/risk/**` | `X-Project-Key` | Per-project daily quota (`projects.daily_request_quota`, BUILDER default 2000) + per-minute rate (`LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`). Watchlist writes honor `projects.watchlist_limit` (BUILDER default 50). |
+| `/forensics/**`, `/watchlist/**`, `/alert-rules/**`, `/usage/**`, `/risk/**` | `X-Project-Key` | Per-project daily quota (`projects.daily_request_quota`, BUILDER default 2000) + per-minute rate (`LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`). Watchlist writes honor `projects.watchlist_limit` (BUILDER default 50) via an atomic occupancy UPSERT (`project_watchlist_usage`). |
 | `/admin/projects/**` | `X-Admin-Key` | Admin key required |
 
-`LUCENTFLOW_API_DAILY_REQUEST_QUOTA` is only the fallback when a project row has no quota. Daily admits are reserved atomically at request start and refunded when the response is not 2xx. Exceeding project quotas returns **HTTP 429**.
+`LUCENTFLOW_API_DAILY_REQUEST_QUOTA` is only the fallback when a project row has no quota. Daily admits are reserved atomically at request start and refunded when the response is not 2xx. Watchlist creates reserve a slot the same way and refund on unique-constraint races or delete. Exceeding project quotas returns **HTTP 429**.
 
 ---
 

@@ -7,7 +7,9 @@ import com.lucentflow.common.entity.Project;
 import com.lucentflow.common.entity.Watchlist;
 import com.lucentflow.common.repository.ProjectRepository;
 import com.lucentflow.common.repository.WatchlistRepository;
+import com.lucentflow.common.usage.WatchlistCapLedger;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,7 +18,7 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * Watchlist CRUD service with cache synchronization.
+ * Watchlist CRUD service with cache synchronization and atomic occupancy reservation.
  *
  * @author ArchLucent
  * @since 1.0
@@ -28,6 +30,7 @@ public class WatchlistService {
     private final WatchlistRepository watchlistRepository;
     private final ProjectRepository projectRepository;
     private final WatchlistCacheService watchlistCacheService;
+    private final WatchlistCapLedger watchlistCapLedger;
 
     @Transactional(readOnly = true)
     public List<WatchlistDTO> listAll(Long projectId) {
@@ -47,7 +50,7 @@ public class WatchlistService {
             throw new IllegalArgumentException("Address already exists in project watchlist");
         }
         int limit = project.getWatchlistLimit() == null ? 0 : project.getWatchlistLimit();
-        if (limit > 0 && watchlistRepository.countByProjectId(projectId) >= limit) {
+        if (!watchlistCapLedger.tryReserve(projectId, limit)) {
             throw new IllegalArgumentException("Watchlist limit exceeded");
         }
         Watchlist item = Watchlist.builder()
@@ -56,9 +59,17 @@ public class WatchlistService {
                 .category(safeTrim(request.category()))
                 .project(project)
                 .build();
-        Watchlist saved = watchlistRepository.save(item);
-        watchlistCacheService.refresh();
-        return toDto(saved);
+        try {
+            Watchlist saved = watchlistRepository.save(item);
+            watchlistCacheService.refresh();
+            return toDto(saved);
+        } catch (DataIntegrityViolationException duplicate) {
+            watchlistCapLedger.release(projectId);
+            throw new IllegalArgumentException("Address already exists in project watchlist", duplicate);
+        } catch (RuntimeException ex) {
+            watchlistCapLedger.release(projectId);
+            throw ex;
+        }
     }
 
     @Transactional
@@ -88,6 +99,7 @@ public class WatchlistService {
             return false;
         }
         watchlistRepository.delete(existing.get());
+        watchlistCapLedger.release(projectId);
         watchlistCacheService.refresh();
         return true;
     }
