@@ -147,8 +147,10 @@ public class WhaleDatabaseSink implements WhaleTransactionSink {
             });
             log.info("[SINK] Upserted batch of {} transactions. Intelligence updated for existing records.",
                     transactions.size());
-        } catch (Exception e) {
-            log.error("[SINK] Native batch UPSERT failed.", e);
+        } catch (RuntimeException e) {
+            log.error("[SINK] Native batch UPSERT failed for {} transactions; caller must skip alerts.",
+                    transactions.size(), e);
+            throw e;
         }
     }
     

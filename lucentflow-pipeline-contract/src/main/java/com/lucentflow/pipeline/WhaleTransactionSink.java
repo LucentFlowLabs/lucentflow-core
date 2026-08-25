@@ -12,5 +12,9 @@ import java.util.List;
  */
 public interface WhaleTransactionSink {
 
+    /**
+     * Persist a whale batch. Implementations must propagate persistence failures
+     * (never swallow them) so callers can skip alerting on uncommitted rows.
+     */
     void saveWhaleTransactions(List<WhaleTransaction> transactions);
 }

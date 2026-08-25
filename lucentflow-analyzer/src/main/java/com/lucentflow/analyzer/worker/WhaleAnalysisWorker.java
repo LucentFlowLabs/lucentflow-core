@@ -266,17 +266,15 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
                         }
                         CompletableFuture.runAsync(() -> {
                             try {
-                                whaleDatabaseSink.saveWhaleTransactions(whaleBatch);
-                                for (WhaleTransaction w : whaleBatch) {
-                                    alertService.sendAlertIfNeeded(w);
-                                }
+                                persistThenAlert(whaleBatch);
+                            } catch (RuntimeException e) {
+                                errorCount.incrementAndGet();
+                                log.error("[SINK-ASYNC] UPSERT failed; alerts skipped for batch of {}.",
+                                        whaleBatch.size(), e);
                             } finally {
                                 dbSaveSemaphore.release();
                             }
-                        }, executor).exceptionally(e -> {
-                            log.error("[SINK-ASYNC] saveWhaleTransactions failed: {}", e.getMessage());
-                            return null;
-                        });
+                        }, executor);
                     }
 
                     processedCount.addAndGet(rawBatch.size());
@@ -294,6 +292,18 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         } catch (Throwable t) {
             log.error("[WORKER-CRASH] Analyzer-Worker-{} crashed with exception", workerId, t);
             log.error("[WORKER-CRASH] Stack trace:", t);
+        }
+    }
+
+    /**
+     * UPSERT first, then alert. Persistence failures propagate and skip alerts.
+     *
+     * @param whaleBatch enriched whales for this drain cycle
+     */
+    void persistThenAlert(List<WhaleTransaction> whaleBatch) {
+        whaleDatabaseSink.saveWhaleTransactions(whaleBatch);
+        for (WhaleTransaction w : whaleBatch) {
+            alertService.sendAlertIfNeeded(w);
         }
     }
 
