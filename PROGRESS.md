@@ -2,7 +2,7 @@
 
 > **Agent files (do not treat this log as the contract):** [`AGENTS.md`](AGENTS.md) always-on · [`PROCESS.md`](PROCESS.md) attach to start a session (`@PROCESS.md` / `/process`).
 >
-> **How to read:** §1 verdict + **Current board** = today’s kanban (the only open-work list). §2–§8 = architecture memo. §5.2 = closed this cycle. Product contract: [`docs/API-DOCUMENTATION.md`](docs/API-DOCUMENTATION.md).
+> **How to read:** §1 verdict + **Current board** = today’s kanban (the only open-work list). §2–§8 = architecture memo. §5 = closed this cycle. Product contract: [`docs/API-DOCUMENTATION.md`](docs/API-DOCUMENTATION.md).
 >
 > **Version:** 1.2.0-STABLE  
 > **Review date:** 2026-08-26  
@@ -21,15 +21,15 @@ LucentFlow 已从 Base L2 **链上哨兵**演进为具备 **B2B 多租户产品�
 |------|------|------|
 | 索引与 checkpoint | ★★★★★ | ID=1 Protocol + DB `CHECK (id = 1)` + 单调 `GREATEST` |
 | 风险分析 / Anti-Rug | ★★★★☆ | RiskEngine.complete 为 ingest/API 共用收尾；点查始终拉 receipt+genesis，ingest 可跳过 |
-| B2B 多租户 API | ★★★★☆ | 项目 CRUD minus DELETE（`PUT isActive`）/ hashed Key / 规则 / V2 plan 配额 / V3 watchlist 占用 / 取证隔离已 wired |
+| B2B 多租户 API | ★★★★☆ | 项目无 DELETE（软关：`PUT /api/v1/admin/projects/{id}` body `isActive`）；hashed Key / 规则 / V2 plan 配额 / V3 watchlist 占用 / 取证隔离已 wired |
 | 告警投递 | ★★★★☆ | HMAC Webhook 按项目；Discord / Telegram 显式 global-only；bulkhead 超时进内存死信再重试 |
 | 安全与运营硬化 | ★★★☆☆ | 双 Key 拦截器 + 分钟桶 / 日配额 / watchlist 占用均为原子预占；无 RBAC |
-| 测试与可演进性 | ★★★☆☆ | 47 个测试类（含 2 个 Testcontainers IT）。有 shutdown 单测，缺全进程关停 IT |
+| 测试与可演进性 | ★★★☆☆ | 截至本评审日 47 个 `*Test`/`*IT` 类（含 2 个 Testcontainers IT）。有 shutdown 单测，缺全进程关停 IT |
 | 部署形态 | ★★★★☆ | Docker Compose + K8s api/worker 拆分（worker `replicas: 1`）；Neo4j 仅为 compose 占位 |
 
 ### Current board (single source of open work)
 
-Update this table when a row ships. Do not copy these rows into §5 or §9.
+Update this table when a row ships. Do not copy these rows into §5.
 
 **Standing (not a ticket):** topology lookup is watchlist-gated; a hit returns the **global** `funding_edges` graph. Contract: §7 and [`docs/API-DOCUMENTATION.md`](docs/API-DOCUMENTATION.md).
 
@@ -37,9 +37,13 @@ Update this table when a row ships. Do not copy these rows into §5 or §9.
 |---|------|-----------|
 | P3 | 全进程 SmartLifecycle 关停 IT | 有 IT 覆盖 indexer+analyzer 停机时 pipe drain + last-chance flush（现有仅为 `WhaleAnalysisWorkerShutdownTest`） |
 | P3 | Webhook 死信落盘或出进程 | 重启不丢未投递项，或 runbook 明确接受内存队列丢失 |
-| P3 | Health 探针策略 | 要么接受 `jsonRpc` DOWN 不踢 pod，要么改探针去解析 JSON（今日 `/actuator/health` HTTP 200 mapping，kubelet 不读 body） |
-| P4 | AlertRule 增量缓存 / project DELETE / RBAC + 审计 | 热路径不再 `findAll` 刷新；租户硬删或正式 RBAC——或文档继续标明 MVP 不做 |
-| P4+ | Neo4j Cypher sync / 更广价格源 / worker 多副本 failover 验证 | 查询源可切图库，或 worker `replicas>1` 在 lease 下验证不双写 checkpoint。**在此之前 lease 只是防御，不是多 writer 绿灯** |
+| P3 | Health 探针策略 | 要么接受 `jsonRpc` DOWN / webhook `WARN` 不踢 pod，要么改探针去解析 JSON（今日 `/actuator/health` HTTP 200 mapping，kubelet 不读 body） |
+| P4 | AlertRule 增量缓存 | upsert 后热路径不再全表 `findAll` 刷新 |
+| P4 | Project 硬删 | `DELETE /api/v1/admin/projects/{id}` 落地，或文档标明 MVP 只做 `PUT /{id}` body `isActive` 软关 |
+| P4 | RBAC + 审计 | 正式角色模型 + 审计日志，或文档标明 MVP 不做 |
+| P4+ | Neo4j Cypher sync | 查询源可切图库（今日 `Neo4jTopologyMirror` 占位，源仍是 Postgres） |
+| P4+ | 更广价格源 | 超出 core-token 列表的多资产报价 |
+| P4+ | worker 多副本 failover | `replicas>1` 在 lease 下验证不双写 checkpoint。**在此之前 lease 只是防御，不是多 writer 绿灯** |
 
 ---
 
@@ -84,10 +88,10 @@ flowchart LR
 **Hard protocols (enforced in code + schema):**
 
 - **ID=1 Protocol** — all sync read/write targets `sync_status.id = 1` (`CHECK (id = 1)` in Flyway V1)；进度用 `GREATEST`，禁止无条件覆盖回退高度。
-- **Zero-loss pipe** — bounded `TransactionPipe` (capacity 5000)；运行期 producer 阻塞不丢。Analyzer 对已 drain 批次 **UPSERT 重试至成功**；关停先等 workers 排空（默认 120s），再在 stop 线程 **last-chance flush**；`@PreDestroy` 若仍有剩余则 ERROR（JVM 正在退出）。K8s worker `terminationGracePeriodSeconds: 180` 与 worker / 默认进程 `timeout-per-shutdown-phase: 180s` 对齐；**API-only** profile 为 30s（无 pipe 排空）。
+- **Zero-loss pipe** — bounded `TransactionPipe` (capacity 5000)；运行期 producer 阻塞不丢。Analyzer 对已 drain 批次 **UPSERT 重试至成功**；关停先等 workers 排空（默认 120s），再在 `SmartLifecycle.stop` 线程 **last-chance flush**。`TransactionPipe.@PreDestroy` 若仍有剩余则 ERROR 并清空（JVM 正在退出；analyzer 应已 flush）。K8s worker `terminationGracePeriodSeconds: 180` 与 worker / 默认进程 `timeout-per-shutdown-phase: 180s` 对齐；**API-only** profile 为 30s（无 pipe 排空）。
 - **Native UPSERT** — whale persistence via `ON CONFLICT (hash)`；ingest 热路径不用 JPA `save`。
 - **RPC 429** — pacing / backpressure；**不** failover 到 backup URL。
-- **Virtual Threads** — indexer parallelism, analysis workers, webhook, usage metering, risk-score lookups.
+- **Virtual Threads** — indexer parallelism, analysis workers, webhook dispatch, risk-score lookups（配额计量走请求线程上的 JDBC，无独立 VT 池）。
 
 ---
 
@@ -119,7 +123,7 @@ flowchart LR
 | Project-scoped watchlist | ✅ Done | `(project_id, address)` + `WatchlistCacheService`；V2 `watchlist_limit`；V3 `project_watchlist_usage` 原子占用 |
 | Per-project alert rules | ✅ Done | `AlertRuleController` / `AlertRuleCacheService` |
 | HMAC project webhooks | ✅ Done | Project URL + optional `webhook_secret`；全局 URL 不再提前 return |
-| Admin project CRUD minus DELETE + key rotate | ✅ Done | `/api/v1/admin/projects`（`PUT isActive` 软关），`X-Admin-Key` |
+| Admin project 无 DELETE + key rotate | ✅ Done | `/api/v1/admin/projects`；软关 `PUT /{id}` body `isActive`；`X-Admin-Key` |
 | Daily API usage metering | ✅ Done | `project_api_usage`；拦截器仅计 2xx |
 | Quota / rate-limit enforcement | ✅ Done | 分钟桶 + 日配额均为 PG 原子 UPSERT；日拒绝退分钟桶；非 2xx 退回日预占 |
 | Commercial plans | ✅ Done | Flyway **V2** `plan` / `daily_request_quota` / `watchlist_limit`（BUILDER 2000/50，DESK 20000/200，PROTOCOL 100000/1000） |
@@ -173,15 +177,9 @@ flowchart LR
 
 ---
 
-## 5. Architecture Review Findings
+## 5. Closed this cycle (2026-07-13 → 2026-08-26)
 
-Open work is **§1 Current board** only. This section is standing product fact plus closed history. Shipped prose: [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
-
-### 5.1 Standing product fact
-
-Topology：Watchlist miss → 空边；命中后返回全局 `funding_edges`，对端不必在本项目 watchlist。操作说明在 **§7**，契约在 [`docs/API-DOCUMENTATION.md`](docs/API-DOCUMENTATION.md)。
-
-### 5.2 Closed this cycle (2026-07-13 → 2026-08-26)
+Open work is **§1 Current board** only. Topology standing fact lives there and in §7. Shipped prose: [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
 Includes former Open items 4–8 and 32–33.
 
@@ -217,14 +215,14 @@ Former incremental V1–V21 history was **squashed** into a single greenfield ba
 |-------|------|-----------|
 | Public | None | `/api/v1/whales`, `/whales/stats`, `/sync-status`, `/oracle/eth-usd`, Actuator |
 | Project | `X-Project-Key` | `/forensics/**`（含 topology）, `/watchlist/**`, `/alert-rules/**`, `/usage/**`, `/risk/**` |
-| Admin | `X-Admin-Key` | `/admin/projects/**`（CRUD minus DELETE（`PUT isActive`）+ rotate-key + usage + `plan`）, `/admin/backfill`（**indexer 进程**；K8s 对 worker `kubectl port-forward`） |
+| Admin | `X-Admin-Key` | `/admin/projects/**`（无 DELETE；软关 `PUT /{id}` body `isActive`；rotate-key + usage + `plan`）, `/admin/backfill`（**indexer 进程**；K8s 对 worker `kubectl port-forward`） |
 
 配额：`projects.daily_request_quota`（BUILDER 默认 2000）+ `LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`；超限 HTTP 429。Watchlist 写入受 `watchlist_limit` 约束，占用经 `project_watchlist_usage` 原子 UPSERT。`LUCENTFLOW_API_DAILY_REQUEST_QUOTA` 仅为行缺失时的 fallback。
 
 **Operator notes:**
 
 - **Topology** — `GET /forensics/topology/{address}` 只门控**查询地址**。miss → 空边 + `scope=watchlist-miss`；命中后 inbound/outbound 是**全局** `funding_edges`（对端不必在本项目 watchlist）。任意地址评分用 `POST /risk/score`（不走 watchlist）。
-- **Health** — `GET /actuator/health` 聚合 JSON 可为 DOWN，HTTP 仍 **200**（`http-mapping`）。K8s 打该路径的探针**不会**因 `jsonRpc` DOWN 失败。要拦流量须解析 JSON 或改探针。
+- **Health** — `GET /actuator/health` 聚合 JSON 可为 DOWN 或 WARN，HTTP 仍 **200**（`http-mapping` 含 `DOWN` / `OUT_OF_SERVICE` / `WARN`）。K8s 打该路径的探针**不会**因 `jsonRpc` DOWN 失败。RPC 可达时 webhook 近期失败会把同一 indicator 打成 **WARN**（`webhookDelivery*` 字段）。要拦流量须解析 JSON 或改探针。
 - **Backfill** — `POST /admin/backfill` 在 indexer/worker；API-only 返回 503。K8s：`kubectl port-forward deploy/lucentflow-worker 8080:8080`。
 - **Shutdown** — worker / 默认进程 `timeout-per-shutdown-phase: 180s`（配合 pipe drain）；**API-only** profile 为 30s。
 
@@ -235,6 +233,8 @@ Product docs: [`docs/API-DOCUMENTATION.md`](docs/API-DOCUMENTATION.md)。
 ---
 
 ## 8. Test Coverage Snapshot
+
+Count as of **2026-08-26**: unique `*Test.java` / `*IT.java` under each module `src/test` (Windows path duplicates ignored). Recount after adding tests.
 
 | Module | Test classes | Notes |
 |--------|--------------|-------|
@@ -250,21 +250,7 @@ Product docs: [`docs/API-DOCUMENTATION.md`](docs/API-DOCUMENTATION.md)。
 
 ---
 
-## 9. Recommended Next Steps
-
-Canonical queue: **§1 Current board**. Closed this cycle: §5.2.
-
----
-
-## 10. Working Tree Snapshot (2026-08-26)
-
-本轮增量：Flyway **V2** / **V3**、Webhook 内存死信、关停 last-chance flush。
-
-剩余焦点：§1 Current board。
-
----
-
-## 11. Conclusion
+## 9. Conclusion
 
 模块边界对哨兵单体足够清晰；硬协议（ID=1、UPSERT、VT、429 不切 backup）在代码与 schema 中一致。hashed Project Key + watchlist 取证 + V2/V3 配额是可用的 SaaS MVP。
 
