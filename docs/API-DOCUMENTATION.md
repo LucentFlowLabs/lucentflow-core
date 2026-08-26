@@ -68,7 +68,7 @@ http://localhost:8080/swagger-ui/index.html
 }
 ```
 
-If the RPC endpoint is down or times out, `jsonRpc` reports **DOWN** with `rpc` / `error` / `message` details, which typically drives the **overall** status to **DOWN**—useful for catching misconfigured `LUCENTFLOW_CHAIN_RPC_URL` before traffic is admitted.
+If the RPC endpoint is down or times out, `jsonRpc` reports **DOWN** with `rpc` / `error` / `message` details, and the **aggregate JSON** `status` is typically **DOWN**. HTTP status is still **200**: `management.endpoint.health.status.http-mapping` maps `DOWN` / `OUT_OF_SERVICE` to 200 so probes that only inspect the status code keep the process in rotation. Kubernetes readiness/liveness on `/actuator/health` therefore **do not fail** when RPC is down. Operators who need to block traffic must parse the JSON body (or point probes at a check that does). Component details are gated by `show-details: when_authorized`.
 
 **Usage:**
 ```bash
@@ -520,7 +520,7 @@ JSON/CSV export is **capped** (SQL `LIMIT`) at `LUCENTFLOW_API_FORENSICS_EXPORT_
 
 Use paginated `GET /forensics/events` to walk the rest of the result set.
 
-Topology (`GET /api/v1/forensics/topology/{address}`) is also watchlist-gated. Addresses not on the project list return empty edges with `"scope": "watchlist-miss"`. Use **`POST /api/v1/risk/score`** to score an arbitrary address.
+Topology (`GET /api/v1/forensics/topology/{address}`) is watchlist-gated on the **lookup address** only. Addresses not on the project list return empty edges with `"scope": "watchlist-miss"`. After a hit, inbound/outbound `funding_edges` are the **global** graph — counterparties do not need to be on the same project watchlist. Use **`POST /api/v1/risk/score`** to score an arbitrary address (not watchlist-gated).
 
 ### Outbound alerts
 
@@ -530,7 +530,7 @@ Topology (`GET /api/v1/forensics/topology/{address}`) is also watchlist-gated. A
 | Discord | **Operator-global** (one message per whale; watchlist labels from all matching projects are merged) | `LUCENTFLOW_DISCORD_WEBHOOK_URL` |
 | Telegram | **Operator-global** (same merge as Discord) | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` |
 
-Webhook delivery waits up to `LUCENTFLOW_WEBHOOK_BULKHEAD_ACQUIRE_TIMEOUT_MS` (default 10000) for a permit (`LUCENTFLOW_WEBHOOK_BULKHEAD_PERMITS`, default 50). Exhaustion logs **ERROR** and increments the delivery failure counter; it does not fail silently.
+Webhook delivery waits up to `LUCENTFLOW_WEBHOOK_BULKHEAD_ACQUIRE_TIMEOUT_MS` (default 10000) for a permit (`LUCENTFLOW_WEBHOOK_BULKHEAD_PERMITS`, default 50). Saturation enqueues an in-memory dead-letter (`LUCENTFLOW_WEBHOOK_DEAD_LETTER_CAPACITY`, default 500) and retries on a 500 ms drain. Exhausted attempts or a full queue log **ERROR** and increment the delivery failure counter.
 
 ### Auth model & quotas
 
@@ -540,7 +540,7 @@ Webhook delivery waits up to `LUCENTFLOW_WEBHOOK_BULKHEAD_ACQUIRE_TIMEOUT_MS` (d
 | `/forensics/**`, `/watchlist/**`, `/alert-rules/**`, `/usage/**`, `/risk/**` | `X-Project-Key` | Per-project daily quota (`projects.daily_request_quota`, BUILDER default 2000) + per-minute rate (`LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`). Watchlist writes honor `projects.watchlist_limit` (BUILDER default 50) via an atomic occupancy UPSERT (`project_watchlist_usage`). |
 | `/admin/projects/**` | `X-Admin-Key` | Admin key required |
 
-`LUCENTFLOW_API_DAILY_REQUEST_QUOTA` is only the fallback when a project row has no quota. Daily admits are reserved atomically at request start and refunded when the response is not 2xx. Watchlist creates reserve a slot the same way and refund on unique-constraint races or delete. Exceeding project quotas returns **HTTP 429**.
+`LUCENTFLOW_API_DAILY_REQUEST_QUOTA` is only the fallback when a project row has no quota. Daily admits are reserved atomically at request start and refunded when the response is not 2xx. A minute-bucket permit taken before a daily reject is refunded in the same UTC minute. Watchlist creates reserve a slot the same way and refund on unique-constraint races or delete. Exceeding project quotas returns **HTTP 429**.
 
 ---
 
@@ -557,9 +557,20 @@ All endpoints below require the **`X-Project-Key`** header unless noted.
 | `/api/v1/watchlist` | CRUD | Project | Project-scoped watchlist |
 | `/api/v1/alert-rules` | GET/PUT | Project | Alert thresholds and routing rules |
 | `/api/v1/usage?days=30` | GET | Project | Daily API request counters |
-| `/api/v1/forensics/topology/{address}` | GET | Project | Funding edges for watchlist addresses |
+| `/api/v1/forensics/topology/{address}` | GET | Project | Watchlist-gated lookup; after a hit, global funding edges |
 | `/api/v1/oracle/eth-usd` | GET | Public | Cached ETH/USD price |
-| `/api/v1/admin/backfill` | POST | Admin | Historical block-range backfill |
+| `/api/v1/admin/backfill` | POST | Admin | Historical block-range backfill (**indexer process**; API-only replica returns 503) |
+
+### Historical backfill (`POST /api/v1/admin/backfill`)
+
+Does **not** move `sync_status` (ID=1). Requires the indexer runtime. On a K8s split, call the **worker** via `kubectl port-forward deploy/lucentflow-worker 8080:8080` — the API Service has no orchestrator and returns **503**. Monolith (`enable-indexer=true` and `enable-api=true`) accepts the same path on the single process.
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/api/v1/admin/backfill \
+  -H "X-Admin-Key: $LUCENTFLOW_ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"fromBlock":100,"toBlock":200}'
+```
 
 ### Risk Score (`POST /api/v1/risk/score`)
 

@@ -76,6 +76,29 @@ class TransactionPipeTest {
     }
 
     @Test
+    void drainAll_removesEveryPendingItem() throws InterruptedException {
+        for (int i = 0; i < 4; i++) {
+            transactionPipe.push(mock(Transaction.class));
+        }
+
+        List<PipedTransaction> all = transactionPipe.drainAll();
+
+        assertThat(all).hasSize(4);
+        assertThat(transactionPipe.hasPending()).isFalse();
+        assertThat(transactionPipe.drainAll()).isEmpty();
+    }
+
+    @Test
+    void clear_afterDrainLeavesEmptyPipe() throws InterruptedException {
+        transactionPipe.push(mock(Transaction.class));
+        transactionPipe.stopAccepting();
+        transactionPipe.drainAll();
+        transactionPipe.clear();
+
+        assertThat(transactionPipe.hasPending()).isFalse();
+    }
+
+    @Test
     void shouldStopAcceptingPushesWithoutClearingQueue() throws InterruptedException {
         transactionPipe.push(mock(Transaction.class));
         transactionPipe.stopAccepting();

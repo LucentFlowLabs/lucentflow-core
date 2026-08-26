@@ -13,6 +13,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -43,6 +44,20 @@ class ProjectApiQuotaServiceTest {
         when(dailyApiUsageLedger.tryReserve(1L, 10)).thenReturn(false);
 
         assertThat(service.evaluate(1L)).contains("Daily request quota exceeded");
+        verify(sharedRateLimitService, never()).release(eq("project:1"));
+    }
+
+    @Test
+    void evaluate_refundsMinutePermitWhenDailyReserveFails() {
+        Project project = Project.builder().id(4L).dailyRequestQuota(10).build();
+        when(projectRepository.findById(4L)).thenReturn(Optional.of(project));
+        ProjectApiQuotaService service = ProjectApiQuotaService.forTests(
+                projectRepository, sharedRateLimitService, dailyApiUsageLedger, 2_000, 120);
+        when(sharedRateLimitService.tryAcquire("project:4", 120)).thenReturn(true);
+        when(dailyApiUsageLedger.tryReserve(4L, 10)).thenReturn(false);
+
+        assertThat(service.evaluate(4L)).contains("Daily request quota exceeded");
+        verify(sharedRateLimitService).release("project:4");
     }
 
     @Test

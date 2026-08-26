@@ -58,6 +58,9 @@ class SingleWriterK8sGateTest {
         assertTrue(workerDoc.contains("--spring.profiles.active=worker"),
                 "worker must use spring.profiles.active=worker");
         assertMatches(workerDoc,
+                "(?m)^[ \\t]+terminationGracePeriodSeconds:\\s*180\\s*$",
+                "worker terminationGracePeriodSeconds must be 180 (pipe drain window)");
+        assertMatches(workerDoc,
                 "(?m)^[ \\t]+- name:\\s*LUCENTFLOW_RUNTIME_ENABLE_INDEXER\\s*$\\s+[ \\t]+value:\\s*\"true\"",
                 "worker must set LUCENTFLOW_RUNTIME_ENABLE_INDEXER=true");
         assertMatches(workerDoc,
@@ -83,7 +86,7 @@ class SingleWriterK8sGateTest {
                             || Pattern.compile("(?m)^[ \\t]+name:\\s*lucentflow-worker\\s*$")
                             .matcher(doc).find();
                     assertFalse(targetsWorker,
-                            yaml.getFileName() + ": HPA must not target worker until leader election");
+                            yaml.getFileName() + ": HPA must not target worker until multi-replica failover is validated");
                 }
             }
         }

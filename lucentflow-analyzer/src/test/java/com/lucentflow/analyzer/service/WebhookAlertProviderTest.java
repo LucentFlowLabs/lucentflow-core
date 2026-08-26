@@ -76,7 +76,7 @@ class WebhookAlertProviderTest {
     }
 
     @Test
-    void doSendWithRetry_bulkheadTimeout_marksFailureWithoutSilentDrop() {
+    void doSendWithRetry_bulkheadTimeout_enqueuesDeadLetterWithoutFailure() {
         WebhookDeliveryStatusTracker tracker = new WebhookDeliveryStatusTracker();
         WebhookAlertProvider provider = new WebhookAlertProvider(
                 new ObjectMapper(),
@@ -85,22 +85,62 @@ class WebhookAlertProviderTest {
                 "global-secret",
                 1000L,
                 new Semaphore(0),
-                0L);
-        AlertDispatchContext context = new AlertDispatchContext(
-                false, null, null, null, 9L, "https://project.example/hook", null);
-        WhaleTransaction tx = WhaleTransaction.builder()
-                .hash("0xdead")
-                .fromAddress("0xfrom")
-                .valueEth(BigDecimal.ONE)
-                .blockNumber(1L)
-                .timestamp(Instant.parse("2026-01-01T00:00:00Z"))
-                .isContractCreation(false)
-                .build();
+                0L,
+                8,
+                8);
+        AlertDispatchContext context = sampleContext();
+        WhaleTransaction tx = sampleTx("0xdead");
 
         provider.doSendWithRetry(tx, context);
 
-        assertThat(tracker.snapshot().failureCount()).isEqualTo(1);
+        assertThat(provider.deadLetterSize()).isEqualTo(1);
+        assertThat(tracker.snapshot().failureCount()).isZero();
         assertThat(tracker.snapshot().successCount()).isZero();
+    }
+
+    @Test
+    void drainDeadLetter_exhaustedAttempts_marksFailure() {
+        WebhookDeliveryStatusTracker tracker = new WebhookDeliveryStatusTracker();
+        WebhookAlertProvider provider = new WebhookAlertProvider(
+                new ObjectMapper(),
+                tracker,
+                "https://global.example/hook",
+                "global-secret",
+                1000L,
+                new Semaphore(0),
+                0L,
+                4,
+                1);
+        WhaleTransaction tx = sampleTx("0xdead");
+
+        provider.doSendWithRetry(tx, sampleContext());
+        assertThat(provider.deadLetterSize()).isEqualTo(1);
+
+        provider.drainDeadLetter();
+
+        assertThat(provider.deadLetterSize()).isZero();
+        assertThat(tracker.snapshot().failureCount()).isEqualTo(1);
+    }
+
+    @Test
+    void enqueueDeadLetter_fullQueue_marksFailure() {
+        WebhookDeliveryStatusTracker tracker = new WebhookDeliveryStatusTracker();
+        WebhookAlertProvider provider = new WebhookAlertProvider(
+                new ObjectMapper(),
+                tracker,
+                "https://global.example/hook",
+                "global-secret",
+                1000L,
+                new Semaphore(0),
+                0L,
+                1,
+                8);
+
+        provider.doSendWithRetry(sampleTx("0xaaa"), sampleContext());
+        provider.doSendWithRetry(sampleTx("0xbbb"), sampleContext());
+
+        assertThat(provider.deadLetterSize()).isEqualTo(1);
+        assertThat(tracker.snapshot().failureCount()).isEqualTo(1);
     }
 
     private static WebhookAlertProvider newProvider(String globalUrl, String globalSecret) {
@@ -113,5 +153,21 @@ class WebhookAlertProviderTest {
                 new Semaphore(50),
                 10_000L
         );
+    }
+
+    private static AlertDispatchContext sampleContext() {
+        return new AlertDispatchContext(
+                false, null, null, null, 9L, "https://project.example/hook", null);
+    }
+
+    private static WhaleTransaction sampleTx(String hash) {
+        return WhaleTransaction.builder()
+                .hash(hash)
+                .fromAddress("0xfrom")
+                .valueEth(BigDecimal.ONE)
+                .blockNumber(1L)
+                .timestamp(Instant.parse("2026-01-01T00:00:00Z"))
+                .isContractCreation(false)
+                .build();
     }
 }

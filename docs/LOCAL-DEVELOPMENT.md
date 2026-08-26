@@ -19,7 +19,7 @@ psql -h localhost -U admin -d lucentflow -f lucentflow-api/src/main/resources/db
 | Variable | Purpose |
 |----------|---------|
 | `X-Project-Key: demo-project-key-2026` | Project-scoped forensics / watchlist / alert-rules / usage |
-| `LUCENTFLOW_ADMIN_API_KEY` | Admin project CRUD at `/api/v1/admin/projects` |
+| `LUCENTFLOW_ADMIN_API_KEY` | Admin project CRUD minus DELETE (`PUT isActive`) at `/api/v1/admin/projects` |
 
 **Production:** Project API keys are stored as SHA-256 `api_key_hash` (clients still send plaintext `X-Project-Key`). Never load `demo_setup.sql` on production; create tenants via Admin API. Per-project quotas live on `projects.daily_request_quota` / `watchlist_limit` (BUILDER defaults 2000/day and 50 addresses); watchlist occupancy is tracked in `project_watchlist_usage`. Fallbacks: `LUCENTFLOW_API_DAILY_REQUEST_QUOTA`, `LUCENTFLOW_API_RATE_LIMIT_PER_MINUTE`, `LUCENTFLOW_API_PUBLIC_RATE_LIMIT_PER_MINUTE` (set `0` to disable).
 

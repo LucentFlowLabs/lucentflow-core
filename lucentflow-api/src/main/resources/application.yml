@@ -40,8 +40,8 @@ spring:
   lifecycle:
     timeout:
       startup: 60s
-      shutdown: 30s
-    timeout-per-shutdown-phase: 30s
+      shutdown: ${LUCENTFLOW_SHUTDOWN_PHASE_TIMEOUT:180s}
+    timeout-per-shutdown-phase: ${LUCENTFLOW_SHUTDOWN_PHASE_TIMEOUT:180s}
 
 lucentflow:
   chain:
@@ -61,6 +61,9 @@ lucentflow:
     concurrency: ${LUCENTFLOW_ANALYZER_CONCURRENCY:2}
     # Skip rug enrich and genesis deep-trace for lower-risk whales when (head - lastScanned) exceeds this.
     catch-up-lag-blocks: ${LUCENTFLOW_ANALYZER_CATCH_UP_LAG_BLOCKS:500}
+    # Wait for workers to empty the pipe, then last-chance flush on the stop thread.
+    shutdown-drain-timeout-seconds: ${LUCENTFLOW_ANALYZER_SHUTDOWN_DRAIN_TIMEOUT_SECONDS:120}
+    shutdown-executor-timeout-seconds: ${LUCENTFLOW_ANALYZER_SHUTDOWN_EXECUTOR_TIMEOUT_SECONDS:60}
   telegram:
     bot-token: ${TELEGRAM_BOT_TOKEN:}
     chat-id: ${TELEGRAM_CHAT_ID:}
@@ -72,6 +75,9 @@ lucentflow:
     connect-timeout-ms: ${LUCENTFLOW_WEBHOOK_CONNECT_TIMEOUT_MS:5000}
     bulkhead-permits: ${LUCENTFLOW_WEBHOOK_BULKHEAD_PERMITS:50}
     bulkhead-acquire-timeout-ms: ${LUCENTFLOW_WEBHOOK_BULKHEAD_ACQUIRE_TIMEOUT_MS:10000}
+    dead-letter-capacity: ${LUCENTFLOW_WEBHOOK_DEAD_LETTER_CAPACITY:500}
+    dead-letter-max-attempts: ${LUCENTFLOW_WEBHOOK_DEAD_LETTER_MAX_ATTEMPTS:8}
+    dead-letter-drain-ms: ${LUCENTFLOW_WEBHOOK_DEAD_LETTER_DRAIN_MS:500}
   alert:
     global-risk-threshold: ${LUCENTFLOW_ALERT_GLOBAL_RISK_THRESHOLD:70}
   admin:

@@ -1,6 +1,6 @@
 package com.lucentflow.api.controller;
 
-import com.lucentflow.api.config.ConditionalOnApiEnabled;
+import com.lucentflow.api.config.ConditionalOnAdminSurfaceEnabled;
 
 import com.lucentflow.api.dto.BackfillRequest;
 import com.lucentflow.indexer.pipeline.PipelineOrchestrator;
@@ -19,12 +19,13 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Admin historical backfill controls (Phase 4).
+ * Admin historical backfill controls (Phase 4). Registered on the indexer process
+ * (monolith or worker profile). API-only replicas return 503 because they have no orchestrator.
  *
  * @author ArchLucent
  * @since 1.0
  */
-@ConditionalOnApiEnabled
+@ConditionalOnAdminSurfaceEnabled
 @RestController
 @RequestMapping("/api/v1/admin/backfill")
 @Tag(name = "Backfill Admin API", description = "On-demand historical block range ingestion.")
@@ -44,7 +45,10 @@ public class BackfillAdminController {
         PipelineOrchestrator orchestrator = pipelineOrchestrator.getIfAvailable();
         if (orchestrator == null) {
             return ResponseEntity.status(503).body(Map.of(
-                    "error", "Indexer runtime disabled (lucentflow.runtime.enable-indexer=false)"));
+                    "error", "Indexer runtime disabled (lucentflow.runtime.enable-indexer=false)",
+                    "message", "POST /api/v1/admin/backfill on the worker process "
+                            + "(kubectl port-forward deploy/lucentflow-worker 8080:8080). "
+                            + "The API replica does not run the indexer."));
         }
         if (request == null || request.fromBlock() == null || request.toBlock() == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "fromBlock and toBlock are required"));

@@ -13,9 +13,9 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -36,8 +36,8 @@ class SharedRateLimitServiceTest {
         SharedRateLimitService service = new SharedRateLimitService(jdbcTemplate, clock);
 
         when(jdbcTemplate.query(anyString(), ArgumentMatchers.<ResultSetExtractor<Long>>any(),
-                eq("project:1"), ArgumentMatchers.anyLong()))
-                .thenReturn(1L, 2L, 3L);
+                eq("project:1"), ArgumentMatchers.anyLong(), eq(2)))
+                .thenReturn(1L, 2L, null);
 
         assertThat(service.tryAcquire("project:1", 2)).isTrue();
         assertThat(service.tryAcquire("project:1", 2)).isTrue();
@@ -48,5 +48,16 @@ class SharedRateLimitServiceTest {
     void tryAcquire_disabledWhenLimitZero() {
         SharedRateLimitService service = new SharedRateLimitService(jdbcTemplate, Clock.systemUTC());
         assertThat(service.tryAcquire("project:9", 0)).isTrue();
+    }
+
+    @Test
+    void release_decrementsCurrentMinuteBucket() {
+        Clock clock = Clock.fixed(Instant.parse("2026-07-13T08:00:00Z"), ZoneOffset.UTC);
+        SharedRateLimitService service = new SharedRateLimitService(jdbcTemplate, clock);
+        long epochMinute = Instant.parse("2026-07-13T08:00:00Z").getEpochSecond() / 60L;
+
+        service.release("project:1");
+
+        verify(jdbcTemplate).update(anyString(), eq("project:1"), eq(epochMinute));
     }
 }

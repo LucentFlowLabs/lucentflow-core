@@ -2,7 +2,8 @@
 """
 CI / deploy gate: enforce single-writer worker posture in K8s manifests.
 
-HARD CONSTRAINT — until lease-based leader election exists:
+HARD CONSTRAINT — lease exists but deploy policy still forces a single writer
+until multi-replica failover is validated (lease is not a multi-writer green light):
   - lucentflow-worker.spec.replicas MUST be 1
   - strategy MUST be Recreate
   - no Service may select component=worker
@@ -117,6 +118,9 @@ def assert_worker_deployment(docs: list[tuple[Path, str]]) -> None:
     if "--spring.profiles.active=worker" not in doc:
         fail(f"{path.name}: worker container must use --spring.profiles.active=worker")
 
+    if not re.search(r"(?m)^[ \t]+terminationGracePeriodSeconds:\s*180\s*$", doc):
+        fail(f"{path.name}: lucentflow-worker terminationGracePeriodSeconds must be 180")
+
     if not re.search(
         r'(?m)^[ \t]+- name:\s*LUCENTFLOW_RUNTIME_ENABLE_INDEXER\s*$'
         r'\s+[ \t]+value:\s*"true"',
@@ -192,7 +196,7 @@ def assert_no_worker_hpa(docs: list[tuple[Path, str]]) -> None:
         ):
             fail(
                 f"{path.name}: HorizontalPodAutoscaler '{name}' targets worker — "
-                "forbidden until leader election"
+                "forbidden until multi-replica failover is validated"
             )
 
 

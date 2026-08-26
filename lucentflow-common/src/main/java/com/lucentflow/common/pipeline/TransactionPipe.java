@@ -83,6 +83,18 @@ public class TransactionPipe {
     }
 
     /**
+     * Drains every remaining item. Used by analyzer last-chance shutdown flush
+     * so {@link #clear()} is not the persistence path.
+     *
+     * @return all queued items in FIFO order; empty when the pipe is already drained
+     */
+    public List<PipedTransaction> drainAll() {
+        List<PipedTransaction> batch = new ArrayList<>(Math.max(1, queue.size()));
+        queue.drainTo(batch);
+        return batch;
+    }
+
+    /**
      * Returns the current size of the queue.
      *
      * @return Current number of transactions in the queue
@@ -131,19 +143,21 @@ public class TransactionPipe {
     }
 
     /**
-     * Last-resort clear after consumers have had a chance to drain.
+     * Bean destruction after {@code SmartLifecycle} stop. The analyzer must have
+     * last-chance flushed; remaining items here are an ERROR (JVM is exiting).
      */
     @PreDestroy
     public void clear() {
         acceptPushes.set(false);
         int remaining = queue.size();
         if (remaining > 0) {
-            log.warn("Force clearing TransactionPipe with {} pending txs (drain window exhausted).", remaining);
+            log.error("TransactionPipe destroyed with {} unpersisted txs; analyzer last-chance flush missed them.",
+                    remaining);
+            queue.clear();
         } else {
             log.info("TransactionPipe empty at destroy; clearing complete.");
         }
-        queue.clear();
-        log.info("TransactionPipe force clear complete. Final stats: {} total processed, {} backpressure events.",
+        log.info("TransactionPipe destroy complete. Final stats: {} total processed, {} backpressure events.",
                 totalProcessed.get(), backpressureEvents.get());
     }
 

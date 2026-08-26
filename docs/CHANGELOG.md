@@ -9,19 +9,23 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 - **Per-project plans** — Flyway `V2__project_plan_quotas.sql`: `plan`, `daily_request_quota` (BUILDER default 2000), `watchlist_limit` (default 50).
 - **Atomic daily quota** — `DailyApiUsageLedger` reserves with `ON CONFLICT … WHERE request_count < quota`; non-2xx responses refund the admit.
 - **Watchlist cap** — Writes fail when the project address cap is reached. Occupancy is reserved atomically (`project_watchlist_usage`, Flyway **V3**) with `ON CONFLICT … WHERE address_count < watchlist_limit`; failed inserts and deletes refund the slot.
-- **Topology isolation** — `/forensics/topology/{address}` requires the address on the project watchlist.
+- **Topology isolation** — `/forensics/topology/{address}` gates the lookup address on the project watchlist (`scope=watchlist-miss` when absent). After a hit, returned `funding_edges` are the **global** graph; counterparties need not be on the same watchlist.
 - **Risk Score API** — `POST /api/v1/risk/score` on-demand lookup with clamped 0–100 score, model version, dedicated RPC permits, timeout 504, and short TTL cache. `score` uses `RiskEngine.complete` (same revert/blacklist weights as ingest); point lookup always attempts receipt + genesis, so it can exceed the persisted ingest score.
 - **Forensic scope header** — `X-LucentFlow-Scope: watchlist` or `watchlist-empty`.
 - **Catch-up lag** — Analyzer skip of rug enrich and genesis deep-trace uses one lag sample and `lucentflow.analyzer.catch-up-lag-blocks` (default 500).
 - **Address labels** — Base USDC is labeled `USDC`; DEX routers categorize as `DEFI`, not `EXCHANGE`.
 - **Global alert channels** — Discord and Telegram are operator-global: one send per whale with merged watchlist labels. HMAC webhooks remain per-project.
-- **Webhook bulkhead** — Acquire waits up to 10s; timeout logs ERROR and records a delivery failure instead of a silent drop.
+- **Webhook bulkhead** — Acquire waits up to 10s (`LUCENTFLOW_WEBHOOK_BULKHEAD_ACQUIRE_TIMEOUT_MS`). Timeout enqueues the in-memory dead-letter below instead of dropping or immediately marking failure.
 - **Forensic export row cap** — JSON/CSV streams use SQL `LIMIT` (`LUCENTFLOW_API_FORENSICS_EXPORT_MAX_ROWS`, default 10000) with `X-LucentFlow-Export-*` headers. Export controllers no longer hold a read-only transaction around the HTTP stream.
 - **Web3j pin** — Parent `${web3j.version}` (4.12.0) covers `core` / `utils` / `crypto`; `lucentflow-common` no longer pins 4.10.0.
 - **Risk Score cache** — Caffeine `expireAfterWrite` + `maximumSize` (default 256).
 - **Risk Score errors** — 400 / 503 / 504 return `{"status","error","message"}` JSON.
 - **Block timestamps on ingest** — `TransactionPipe` carries the producing block time so catch-up whales are not stamped with `Instant.now()`.
 - **Alert rules MockMvc** — GET/PUT `/api/v1/alert-rules` 403/400/200 contract plus upsert cache refresh.
+- **Shutdown last-chance flush** — Analyzer stop thread `drainAll` + persist after the drain wait (default 120s). K8s worker `terminationGracePeriodSeconds: 180`; Spring lifecycle phase timeout 180s. `@PreDestroy` logs ERROR if the pipe is still non-empty.
+- **Worker backfill** — `POST /api/v1/admin/backfill` is registered when API **or** indexer is enabled. API-only replicas return 503; K8s invokes the worker via `kubectl port-forward`.
+- **Minute-bucket refund** — Daily quota reject releases the same-minute `api_rate_limit_buckets` permit. Acquire uses `WHERE request_count < limit` so a reject does not increment past the cap.
+- **Webhook dead-letter** — Bulkhead timeout enqueues an in-memory bounded queue (capacity 500, max 8 attempts, 500 ms drain) instead of dropping. Full queue or exhausted attempts increment the delivery failure counter.
 - **Regression tests** — Catch-up lag fail-open; `shouldAlert` watchlist/score/creation matrix; watchlist `limit=0` and under-cap writes; topology miss/hit (global edges after watchlist gate); Risk Score ignores persisted ingest score; daily-quota SQL `WHERE request_count < ?`; Discord/Telegram blank-config no-op; `RpcFailoverInterceptor` does not fail over on HTTP 429. Flyway IT asserts V1–V3 (plan/quota columns + `project_watchlist_usage`).
 
 ---
@@ -35,7 +39,7 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 - **Webhook alerts** — Multi-provider fan-out (`Telegram`, project webhook) with HMAC-SHA256 signing (`X-LucentFlow-Signature`).
 - **Watchlist** — Project-scoped CRUD with in-memory O(1) cache for pipeline evaluation.
 - **Alert rules (Run-1)** — Per-project thresholds; watchlist hits bypass minimum score; `AlertRuleCacheService` hot-reload.
-- **Project admin (Run-2)** — Admin CRUD at `/api/v1/admin/projects`, API key rotation, daily usage metering in `project_api_usage`.
+- **Project admin (Run-2)** — Admin CRUD minus DELETE (`PUT isActive`) at `/api/v1/admin/projects`, API key rotation, daily usage metering in `project_api_usage`.
 - **Risk scoring** — Normalized 0–100 profile with JSONB dimension reasons.
 
 ### Technical debt (Run-3)

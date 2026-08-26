@@ -102,6 +102,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    stop_grace_period: 180s
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1"]
       interval: 30s

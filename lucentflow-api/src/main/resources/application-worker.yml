@@ -1,4 +1,5 @@
-# Worker profile: indexer + analyzer. REST / Admin MVC disabled; Actuator health kept for probes.
+# Worker profile: indexer + analyzer. Product REST/Swagger off; indexer admin backfill
+# stays on :8080 for kubectl port-forward (no Service, NetworkPolicy deny-ingress).
 # java -jar lucentflow.jar --spring.profiles.active=worker
 #
 # Dual insurance against sync_status ID=1 races:
@@ -6,6 +7,11 @@
 #   2. Runtime lease — WorkerLeaseCoordinator TTL lease gates scan + analysis (lucentflow.lease.*)
 # Do not scale workers until multi-replica lease failover is validated and the deploy gate is relaxed.
 # See lucentflow-deployment/k8s/README.md.
+spring:
+  lifecycle:
+    timeout:
+      shutdown: 180s
+    timeout-per-shutdown-phase: 180s
 lucentflow:
   runtime:
     enable-indexer: true

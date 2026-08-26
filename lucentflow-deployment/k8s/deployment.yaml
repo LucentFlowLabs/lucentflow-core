@@ -5,7 +5,8 @@
 #   - strategy MUST be Recreate (never RollingUpdate with maxSurge > 0)
 #   - do NOT create a ClusterIP/LoadBalancer Service for the worker
 #   - apply networkpolicy.yaml so worker:8080 is not reachable from other pods
-# Scaling workers without leader election will double-write sync_status (ID=1) and corrupt checkpoints.
+# Scaling workers will double-write sync_status (ID=1) even with WorkerLeaseCoordinator;
+# lease is defense-in-depth, not a multi-writer green light. Keep replicas: 1 until failover is validated.
 #
 # @author ArchLucent
 # @since 1.2
@@ -79,7 +80,7 @@ metadata:
     lucentflow.io/single-writer: "true"
     lucentflow.io/max-replicas: "1"
 spec:
-  # MUST stay 1 until lease-based leader election exists.
+  # MUST stay 1. Lease is defense-in-depth, not a multi-writer green light.
   replicas: 1
   # Recreate avoids two writers during rollouts (RollingUpdate maxSurge would race on sync_status).
   strategy:
@@ -96,6 +97,8 @@ spec:
       annotations:
         lucentflow.io/single-writer: "true"
     spec:
+      # Drain window: analyzer 120s pipe wait + 60s executor; keep above Spring lifecycle 180s.
+      terminationGracePeriodSeconds: 180
       containers:
         - name: lucentflow-worker
           image: lucentflow/lucentflow-api:1.2.0-STABLE

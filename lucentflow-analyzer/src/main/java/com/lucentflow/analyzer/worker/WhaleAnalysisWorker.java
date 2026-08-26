@@ -117,6 +117,16 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
     @Value("${lucentflow.analyzer.catch-up-lag-blocks:500}")
     private long catchUpLagThresholdBlocks = 500L;
 
+    /**
+     * Seconds to wait for analysis loops to empty the pipe before stop-thread flush.
+     * Package-visible so shutdown tests can skip the wall-clock wait.
+     */
+    @Value("${lucentflow.analyzer.shutdown-drain-timeout-seconds:120}")
+    long shutdownDrainTimeoutSeconds = 120L;
+
+    @Value("${lucentflow.analyzer.shutdown-executor-timeout-seconds:60}")
+    long shutdownExecutorTimeoutSeconds = 60L;
+
     private static final int CATCH_UP_TRACE_MIN_RISK_SCORE = 60;
 
     /**
@@ -193,7 +203,8 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         isShuttingDown.set(true);
         transactionPipe.stopAccepting();
 
-        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        long drainTimeoutSeconds = Math.max(0L, shutdownDrainTimeoutSeconds);
+        long deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(drainTimeoutSeconds);
         while (transactionPipe.hasPending() && System.nanoTime() < deadlineNanos) {
             try {
                 Thread.sleep(100L);
@@ -203,16 +214,20 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
             }
         }
         if (transactionPipe.hasPending()) {
-            log.warn("WhaleAnalysisWorker drain timeout with {} pending txs remaining", transactionPipe.size());
+            log.warn("WhaleAnalysisWorker drain wait elapsed with {} pending txs; last-chance flush on stop thread",
+                    transactionPipe.size());
+            flushPipeForShutdown();
         } else {
             log.info("WhaleAnalysisWorker drain complete; pipe empty");
         }
 
         if (executor != null) {
             executor.shutdown();
+            long executorTimeoutSeconds = Math.max(1L, shutdownExecutorTimeoutSeconds);
             try {
-                if (!executor.awaitTermination(25, TimeUnit.SECONDS)) {
-                    log.warn("WhaleAnalysisWorker executor did not terminate within 25s; forcing shutdownNow");
+                if (!executor.awaitTermination(executorTimeoutSeconds, TimeUnit.SECONDS)) {
+                    log.warn("WhaleAnalysisWorker executor did not terminate within {}s; forcing shutdownNow",
+                            executorTimeoutSeconds);
                     executor.shutdownNow();
                     if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
                         log.warn("WhaleAnalysisWorker executor still running after force stop");
@@ -225,8 +240,26 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
             }
         }
 
+        if (transactionPipe.hasPending()) {
+            log.error("Pipe still has {} txs after executor stop; last-chance flush", transactionPipe.size());
+            flushPipeForShutdown();
+        }
+
         log.info("WhaleAnalysisWorker shutdown complete. Final stats: {} processed, {} whales detected, {} errors.",
                 processedCount.get(), whaleCount.get(), errorCount.get());
+    }
+
+    /**
+     * Drains whatever is still in the pipe and persists it on the caller thread.
+     * Used when analysis loops did not empty the queue before the drain deadline.
+     */
+    void flushPipeForShutdown() {
+        List<PipedTransaction> remaining = transactionPipe.drainAll();
+        if (remaining.isEmpty()) {
+            return;
+        }
+        log.warn("Shutdown last-chance flush of {} piped txs", remaining.size());
+        ingestDrainedBatch(remaining);
     }
 
     /**
@@ -241,8 +274,9 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    if (!leadershipGate.isLeader()) {
+                    if (!isShuttingDown.get() && !leadershipGate.isLeader()) {
                         // Follower: do not drain the pipe (leader owns ingest + analysis).
+                        // During shutdown this process still owns the in-memory queue.
                         LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(500));
                         continue;
                     }
@@ -259,48 +293,7 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
                         continue;
                     }
 
-                    // Process batch in memory
-                    List<CompletableFuture<WhaleTransaction>> futures = rawBatch.stream()
-                            .map(this::processAndFilterWhaleAsync)
-                            .toList();
-
-                    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-
-                    List<WhaleTransaction> whaleBatch = futures.stream()
-                            .map(CompletableFuture::join)
-                            .filter(Objects::nonNull)
-                            .toList();
-
-                    if (!whaleBatch.isEmpty()) {
-                        for (WhaleTransaction w : whaleBatch) {
-                            tagInferenceEngine.inferCandidateTags(w);
-                            tagOracleService.applyResolvedTags(w);
-                        }
-                        boolean acquired = false;
-                        try {
-                            dbSaveSemaphore.acquire();
-                            acquired = true;
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                        }
-                        try {
-                            persistThenAlertUntilSuccess(whaleBatch);
-                            whaleCount.addAndGet(whaleBatch.size());
-                        } catch (RuntimeException e) {
-                            errorCount.incrementAndGet();
-                            log.error("[SINK-RETRY] persist abandoned for batch of {} hashes={}.",
-                                    whaleBatch.size(), sinkBatchHashes(whaleBatch), e);
-                            if (Thread.currentThread().isInterrupted()) {
-                                return;
-                            }
-                        } finally {
-                            if (acquired) {
-                                dbSaveSemaphore.release();
-                            }
-                        }
-                    }
-
-                    processedCount.addAndGet(rawBatch.size());
+                    ingestDrainedBatch(rawBatch);
                     
                     if (processedCount.get() % 1000 == 0) {
                         log.debug("[STATUS] Analyzer throughput: {} processed, {} whales detected.",
@@ -316,6 +309,59 @@ public class WhaleAnalysisWorker implements SmartLifecycle {
             log.error("[WORKER-CRASH] Analyzer-Worker-{} crashed with exception", workerId, t);
             log.error("[WORKER-CRASH] Stack trace:", t);
         }
+    }
+
+    /**
+     * Enrich, UPSERT, then alert a drained pipe batch. Shared by the analysis loop
+     * and shutdown last-chance flush.
+     *
+     * @param rawBatch items already removed from {@link TransactionPipe}
+     */
+    void ingestDrainedBatch(List<PipedTransaction> rawBatch) {
+        if (rawBatch == null || rawBatch.isEmpty()) {
+            return;
+        }
+        List<CompletableFuture<WhaleTransaction>> futures = rawBatch.stream()
+                .map(this::processAndFilterWhaleAsync)
+                .toList();
+
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+        List<WhaleTransaction> whaleBatch = futures.stream()
+                .map(CompletableFuture::join)
+                .filter(Objects::nonNull)
+                .toList();
+
+        if (!whaleBatch.isEmpty()) {
+            for (WhaleTransaction w : whaleBatch) {
+                tagInferenceEngine.inferCandidateTags(w);
+                tagOracleService.applyResolvedTags(w);
+            }
+            boolean acquired = false;
+            try {
+                dbSaveSemaphore.acquire();
+                acquired = true;
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+            try {
+                persistThenAlertUntilSuccess(whaleBatch);
+                whaleCount.addAndGet(whaleBatch.size());
+            } catch (RuntimeException e) {
+                errorCount.incrementAndGet();
+                log.error("[SINK-RETRY] persist abandoned for batch of {} hashes={}.",
+                        whaleBatch.size(), sinkBatchHashes(whaleBatch), e);
+                if (Thread.currentThread().isInterrupted()) {
+                    return;
+                }
+            } finally {
+                if (acquired) {
+                    dbSaveSemaphore.release();
+                }
+            }
+        }
+
+        processedCount.addAndGet(rawBatch.size());
     }
 
     /**

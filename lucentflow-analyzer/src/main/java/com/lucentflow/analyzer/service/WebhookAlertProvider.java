@@ -5,9 +5,11 @@ import com.lucentflow.common.entity.WhaleTransaction;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.net.URI;
@@ -19,6 +21,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Generic outbound Webhook provider for high-risk alerts.
+ * Bulkhead saturation enqueues a bounded in-memory dead-letter for retry.
  *
  * @author ArchLucent
  * @since 1.0
@@ -48,6 +53,18 @@ public class WebhookAlertProvider implements AlertProvider {
     private final WebhookDeliveryStatusTracker deliveryStatusTracker;
     private final Semaphore webhookBulkhead;
     private final long bulkheadAcquireTimeoutMs;
+    private final BlockingQueue<DeadLetterItem> deadLetter;
+    private final int deadLetterMaxAttempts;
+
+    /**
+     * In-memory retry after bulkhead saturation. Bounded so a down webhook cannot OOM the worker.
+     *
+     * @param tx       whale that still needs delivery
+     * @param context  dispatch metadata (project URL / HMAC)
+     * @param attempts DLQ cycles already used (1 after the first bulkhead miss)
+     */
+    record DeadLetterItem(WhaleTransaction tx, AlertDispatchContext context, int attempts) {
+    }
 
     @Autowired
     public WebhookAlertProvider(
@@ -57,7 +74,9 @@ public class WebhookAlertProvider implements AlertProvider {
             @Value("${lucentflow.webhook.secret-token:}") String secretToken,
             @Value("${lucentflow.webhook.connect-timeout-ms:5000}") long connectTimeoutMs,
             @Value("${lucentflow.webhook.bulkhead-permits:50}") int bulkheadPermits,
-            @Value("${lucentflow.webhook.bulkhead-acquire-timeout-ms:10000}") long bulkheadAcquireTimeoutMs
+            @Value("${lucentflow.webhook.bulkhead-acquire-timeout-ms:10000}") long bulkheadAcquireTimeoutMs,
+            @Value("${lucentflow.webhook.dead-letter-capacity:500}") int deadLetterCapacity,
+            @Value("${lucentflow.webhook.dead-letter-max-attempts:8}") int deadLetterMaxAttempts
     ) {
         this(
                 objectMapper,
@@ -66,7 +85,9 @@ public class WebhookAlertProvider implements AlertProvider {
                 secretToken,
                 connectTimeoutMs,
                 new Semaphore(Math.max(1, bulkheadPermits)),
-                Math.max(0L, bulkheadAcquireTimeoutMs)
+                Math.max(0L, bulkheadAcquireTimeoutMs),
+                Math.max(1, deadLetterCapacity),
+                Math.max(1, deadLetterMaxAttempts)
         );
     }
 
@@ -79,12 +100,38 @@ public class WebhookAlertProvider implements AlertProvider {
             Semaphore webhookBulkhead,
             long bulkheadAcquireTimeoutMs
     ) {
+        this(
+                objectMapper,
+                deliveryStatusTracker,
+                webhookUrl,
+                secretToken,
+                connectTimeoutMs,
+                webhookBulkhead,
+                bulkheadAcquireTimeoutMs,
+                500,
+                8
+        );
+    }
+
+    WebhookAlertProvider(
+            ObjectMapper objectMapper,
+            WebhookDeliveryStatusTracker deliveryStatusTracker,
+            String webhookUrl,
+            String secretToken,
+            long connectTimeoutMs,
+            Semaphore webhookBulkhead,
+            long bulkheadAcquireTimeoutMs,
+            int deadLetterCapacity,
+            int deadLetterMaxAttempts
+    ) {
         this.objectMapper = objectMapper;
         this.deliveryStatusTracker = deliveryStatusTracker;
         this.webhookUrl = webhookUrl;
         this.secretToken = secretToken;
         this.webhookBulkhead = webhookBulkhead;
         this.bulkheadAcquireTimeoutMs = bulkheadAcquireTimeoutMs;
+        this.deadLetter = new ArrayBlockingQueue<>(Math.max(1, deadLetterCapacity));
+        this.deadLetterMaxAttempts = Math.max(1, deadLetterMaxAttempts);
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.max(1000L, connectTimeoutMs)))
                 .executor(WEBHOOK_EXECUTOR)
@@ -120,19 +167,23 @@ public class WebhookAlertProvider implements AlertProvider {
     }
 
     void doSendWithRetry(WhaleTransaction tx, AlertDispatchContext context) {
+        doSendWithRetry(tx, context, 0);
+    }
+
+    void doSendWithRetry(WhaleTransaction tx, AlertDispatchContext context, int deadLetterAttempts) {
         boolean acquired;
         try {
             acquired = webhookBulkhead.tryAcquire(bulkheadAcquireTimeoutMs, TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            log.error("[WEBHOOK] Interrupted while waiting for bulkhead tx={}", tx.getHash());
-            deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
+            log.warn("[WEBHOOK] Interrupted while waiting for bulkhead tx={}; enqueueing dead-letter", tx.getHash());
+            enqueueDeadLetter(tx, context, deadLetterAttempts + 1);
             return;
         }
         if (!acquired) {
-            log.error("[WEBHOOK] Bulkhead saturated after {} ms. Dropping tx {}",
-                    bulkheadAcquireTimeoutMs, tx.getHash());
-            deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
+            log.warn("[WEBHOOK] Bulkhead saturated after {} ms. Enqueueing dead-letter tx={} attempt={}",
+                    bulkheadAcquireTimeoutMs, tx.getHash(), deadLetterAttempts + 1);
+            enqueueDeadLetter(tx, context, deadLetterAttempts + 1);
             return;
         }
         try {
@@ -178,6 +229,45 @@ public class WebhookAlertProvider implements AlertProvider {
             log.warn("[WEBHOOK] payload/build failed tx={} err={}", tx.getHash(), e.getMessage());
         } finally {
             webhookBulkhead.release();
+        }
+    }
+
+    /**
+     * Retry a bounded batch of bulkhead-deferred deliveries. Package-visible for tests.
+     */
+    @Scheduled(fixedDelayString = "${lucentflow.webhook.dead-letter-drain-ms:500}")
+    void drainDeadLetter() {
+        int budget = 16;
+        while (budget-- > 0) {
+            DeadLetterItem item = deadLetter.poll();
+            if (item == null) {
+                return;
+            }
+            doSendWithRetry(item.tx(), item.context(), item.attempts());
+        }
+    }
+
+    int deadLetterSize() {
+        return deadLetter.size();
+    }
+
+    private void enqueueDeadLetter(WhaleTransaction tx, AlertDispatchContext context, int nextAttempts) {
+        if (nextAttempts > deadLetterMaxAttempts) {
+            log.error("[WEBHOOK] Dead-letter exhausted after {} attempts tx={}", deadLetterMaxAttempts, tx.getHash());
+            deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
+            return;
+        }
+        if (!deadLetter.offer(new DeadLetterItem(tx, context, nextAttempts))) {
+            log.error("[WEBHOOK] Dead-letter full; dropping tx={}", tx.getHash());
+            deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
+        }
+    }
+
+    @PreDestroy
+    void logPendingDeadLetters() {
+        int remaining = deadLetter.size();
+        if (remaining > 0) {
+            log.error("[WEBHOOK] Destroying with {} undelivered dead-letter webhook(s)", remaining);
         }
     }
 

@@ -62,6 +62,7 @@ public class ProjectApiQuotaService {
 
     /**
      * Atomically reserve a daily admit (and a per-minute permit). Empty means allowed.
+     * A minute permit taken before a daily reject is refunded.
      *
      * @return rejection reason, or empty if the request is allowed
      */
@@ -74,6 +75,9 @@ public class ProjectApiQuotaService {
         }
         int dailyQuota = resolveDailyQuota(projectId);
         if (!dailyApiUsageLedger.tryReserve(projectId, dailyQuota)) {
+            if (rateLimitPerMinute > 0) {
+                sharedRateLimitService.release("project:" + projectId);
+            }
             return Optional.of("Daily request quota exceeded");
         }
         return Optional.empty();

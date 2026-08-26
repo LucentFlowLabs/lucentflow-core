@@ -5,7 +5,7 @@ Split deployment of the same fat JAR:
 | Workload | Profile / flags | Role | Replicas |
 |----------|-----------------|------|----------|
 | `lucentflow-api` | `--spring.profiles.active=api` | REST + Actuator | horizontally scalable |
-| `lucentflow-worker` | `--spring.profiles.active=worker` | Indexer + analyzer (`enable-api=false`; Actuator only) | **exactly 1** |
+| `lucentflow-worker` | `--spring.profiles.active=worker` | Indexer + analyzer (`enable-api=false`; Actuator + indexer admin backfill) | **exactly 1** |
 
 ## HARD CONSTRAINT — single-writer worker
 
@@ -21,6 +21,16 @@ PostgreSQL TTL lease election (`worker_leases` / `WorkerLeaseCoordinator`) now g
 Violating the deploy gate still risks overlapping writers during lease expiry windows and corrupts `sync_status` **ID=1**.
 
 Worker readiness/liveness probes hit `/actuator/health` via the kubelet. That does not require a ClusterIP Service.
+
+`POST /api/v1/admin/backfill` lives on the **worker** (indexer) process. The API Service returns **503**. Invoke via port-forward (NetworkPolicy still blocks pod-to-pod ingress):
+
+```bash
+kubectl -n <ns> port-forward deploy/lucentflow-worker 8080:8080
+curl -sS -X POST http://127.0.0.1:8080/api/v1/admin/backfill \
+  -H "X-Admin-Key: $LUCENTFLOW_ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"fromBlock":100,"toBlock":200}'
+```
 
 The same rules are enforced by:
 

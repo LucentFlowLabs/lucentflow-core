@@ -9,8 +9,9 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Enables REST MVC / Admin surfaces. Worker profile sets {@code lucentflow.runtime.enable-api=false}
- * so only Actuator health remains reachable for probes.
+ * Enables REST MVC / Admin product surfaces. Worker profile sets
+ * {@code lucentflow.runtime.enable-api=false} so whales/forensics/projects stay off.
+ * Indexer admin backfill is gated separately by {@link ConditionalOnAdminSurfaceEnabled}.
  *
  * @author ArchLucent
  * @since 1.2
