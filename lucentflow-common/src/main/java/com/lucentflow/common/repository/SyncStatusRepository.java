@@ -31,14 +31,15 @@ public interface SyncStatusRepository extends JpaRepository<SyncStatus, Long> {
      * Updates synchronization progress for a specific row (ID 1 Protocol).
      *
      * <p>Uses a native update to avoid accidental insertion of multiple rows and to ensure
-     * deterministic checkpoint persistence on crash/restart boundaries.</p>
+     * deterministic checkpoint persistence on crash/restart boundaries. Height is
+     * enqueue high-water: crash before analyzer UPSERT is at-most-once for those hashes.</p>
      *
      * <p>Height is monotonic: {@code GREATEST} so out-of-order async chunk checkpoints
      * cannot regress {@code last_scanned_block}. The row is still matched when the
      * incoming height is lower, so a return of {@code 0} means the id=1 row is missing.</p>
      *
      * @param id Row id (must be 1L for ID 1 Protocol)
-     * @param blockNumber Latest fully processed block height
+     * @param blockNumber enqueue high-water for this chunk (not UPSERT completion)
      * @param updatedAt Timestamp for audit trail (UTC Instant)
      * @return number of rows updated (0 if row missing)
      */
@@ -62,7 +63,7 @@ public interface SyncStatusRepository extends JpaRepository<SyncStatus, Long> {
      * </p>
      *
      * @param id  sync_status primary key (must be 1L for ID=1 protocol)
-     * @param block last scanned block number
+     * @param block enqueue high-water (not UPSERT completion)
      */
     @Modifying
     @Transactional

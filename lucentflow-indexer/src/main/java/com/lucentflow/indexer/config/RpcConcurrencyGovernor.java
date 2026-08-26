@@ -20,6 +20,7 @@ import java.util.concurrent.locks.ReentrantLock;
  */
 @Slf4j
 @Component
+@ConditionalOnIndexerEnabled
 public class RpcConcurrencyGovernor {
 
     private static final int ALCHEMY_MAX_CONCURRENT_PERMITS = 20;

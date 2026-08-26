@@ -6,15 +6,12 @@ import lombok.*;
 import java.time.Instant;
 
 /**
- * JPA Entity for persistent blockchain synchronization state management.
- * 
- * <p>Implementation Details:
- * Thread-safe entity with JPA-managed persistence across application restarts.
- * Uses automatic timestamp management for audit trail and data integrity verification.
- * Virtual thread compatible through immutable design and JPA-managed concurrency.
- * Ensures zero data loss during blockchain indexing operations with ACID compliance.
- * </p>
- * 
+ * JPA entity for the ID=1 indexer checkpoint ({@code sync_status}).
+ *
+ * <p>{@code lastScannedBlock} is enqueue high-water, not UPSERT completion.
+ * Production writes use {@link com.lucentflow.common.repository.SyncStatusRepository}
+ * native SQL, not JPA {@code save}.</p>
+ *
  * @author ArchLucent
  * @since 1.0
  */
@@ -30,6 +27,7 @@ public class SyncStatus {
     @Id
     private Long id;
 
+    /** Enqueue high-water; crash before UPSERT is at-most-once for those hashes. */
     @Column(name = "last_scanned_block", nullable = false)
     private Long lastScannedBlock;
 

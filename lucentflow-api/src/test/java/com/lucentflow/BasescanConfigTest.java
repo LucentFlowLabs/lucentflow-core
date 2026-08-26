@@ -1,15 +1,11 @@
 package com.lucentflow;
 
 import com.lucentflow.api.config.ApiTestConfig;
-import com.lucentflow.analyzer.worker.WhaleAnalysisWorker;
-import com.lucentflow.indexer.pipeline.PipelineOrchestrator;
-import com.lucentflow.indexer.source.BaseBlockSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 /**
  * Verifies application context loads with Basescan configuration on H2 test profile.
@@ -23,19 +19,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 @TestPropertySource(properties = {
         "lucentflow.basescan.api-key=test-key",
         "lucentflow.basescan.base-url=https://api.basescan.org/api",
-        "spring.task.scheduling.enabled=false",
-        "spring.main.lazy-initialization=true"
+        "lucentflow.runtime.enable-indexer=false",
+        "lucentflow.runtime.enable-analyzer=false",
+        "spring.task.scheduling.enabled=false"
 })
 class BasescanConfigTest {
-
-    @MockitoBean
-    private BaseBlockSource baseBlockSource;
-
-    @MockitoBean
-    private PipelineOrchestrator pipelineOrchestrator;
-
-    @MockitoBean
-    private WhaleAnalysisWorker whaleAnalysisWorker;
 
     @Test
     void contextLoads() {

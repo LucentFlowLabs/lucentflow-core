@@ -83,8 +83,10 @@ curl http://localhost:8080/actuator/health
 
 **Description:** Retrieve current blockchain synchronization status including last scanned block and pipeline state.
 
+`lastScannedBlock` is the ID=1 **enqueue** high-water: whale candidates from that height have been pushed onto `TransactionPipe`. Analyzer UPSERT is asynchronous. A process crash after this height advances and before persist is **at-most-once** for those transaction hashes (they are not re-scanned). A lost checkpoint reprocesses via idempotent UPSERT.
+
 **Response Fields (ID=1 Protocol):**
-- `lastScannedBlock`: Latest block number successfully indexed (`0` when not started)
+- `lastScannedBlock`: Highest block whose whale candidates were enqueued (`0` when not started). Not “UPSERT completed”.
 - `chainHeadBlock`: Chain tip at last indexer heartbeat (nullable)
 - `blockLag`: `chainHeadBlock - lastScannedBlock` (nullable)
 - `blocksPerSecond`: Approximate indexing throughput (nullable)

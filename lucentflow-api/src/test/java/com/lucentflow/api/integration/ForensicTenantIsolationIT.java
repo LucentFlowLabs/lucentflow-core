@@ -1,25 +1,28 @@
 package com.lucentflow.api.integration;
 
 import com.lucentflow.api.service.ForensicQueryService;
-import com.lucentflow.analyzer.worker.WhaleAnalysisWorker;
 import com.lucentflow.common.entity.Project;
 import com.lucentflow.common.entity.WhaleTransaction;
 import com.lucentflow.common.repository.AlertRuleRepository;
 import com.lucentflow.common.repository.ProjectRepository;
+import com.lucentflow.common.repository.SyncStatusRepository;
 import com.lucentflow.common.repository.WatchlistRepository;
 import com.lucentflow.common.repository.WhaleTransactionRepository;
+import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.indexer.pipeline.PipelineOrchestrator;
 import com.lucentflow.indexer.source.BaseBlockSource;
+import com.lucentflow.indexer.source.DirectRpcPermitPort;
+import com.lucentflow.pipeline.RpcPermitPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.ApplicationContext;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -32,7 +35,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Postgres + Flyway: empty project watchlist yields zero forensic hits
- * even when whale rows exist globally.
+ * even when whale rows exist globally. Also proves API-like flags
+ * ({@code enable-indexer=false}) do not advance {@code sync_status} id=1.
  *
  * @author ArchLucent
  * @since 1.2
@@ -66,14 +70,8 @@ class ForensicTenantIsolationIT {
         registry.add("lucentflow.basescan.base-url", () -> "https://api.basescan.org/api");
     }
 
-    @MockitoBean
-    private BaseBlockSource baseBlockSource;
-
-    @MockitoBean
-    private PipelineOrchestrator pipelineOrchestrator;
-
-    @MockitoBean
-    private WhaleAnalysisWorker whaleAnalysisWorker;
+    @Autowired
+    private ApplicationContext applicationContext;
 
     @Autowired
     private ForensicQueryService forensicQueryService;
@@ -89,6 +87,9 @@ class ForensicTenantIsolationIT {
 
     @Autowired
     private WhaleTransactionRepository whaleTransactionRepository;
+
+    @Autowired
+    private SyncStatusRepository syncStatusRepository;
 
     private Long projectId;
 
@@ -134,5 +135,18 @@ class ForensicTenantIsolationIT {
                 null, null, null, null, null, projectId, PageRequest.of(0, 20));
         assertThat(page.getTotalElements()).isZero();
         assertThat(whaleTransactionRepository.count()).isEqualTo(1);
+    }
+
+    @Test
+    void indexerDisabled_doesNotCreateScanBeansOrAdvanceId1Checkpoint() {
+        assertThat(applicationContext.getBeanProvider(BaseBlockSource.class).getIfAvailable()).isNull();
+        assertThat(applicationContext.getBeanProvider(RpcConcurrencyGovernor.class).getIfAvailable()).isNull();
+        assertThat(applicationContext.getBeanProvider(PipelineOrchestrator.class).getIfAvailable()).isNull();
+        assertThat(applicationContext.getBean(RpcPermitPort.class)).isInstanceOf(DirectRpcPermitPort.class);
+
+        assertThat(syncStatusRepository.findById(1L)).hasValueSatisfying(status ->
+                assertThat(status.getLastScannedBlock())
+                        .as("Flyway sentinel must stay 0 when API process starts")
+                        .isEqualTo(0L));
     }
 }

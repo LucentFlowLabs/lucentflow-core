@@ -6,6 +6,9 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+- **Ingest crash semantics** — Checkpoint is enqueue high-water (`last_scanned_block`), not UPSERT completion. Live `TransactionPipe` producers block (no drop). Crash / SIGKILL after checkpoint and before persist is **at-most-once**. Removed the `Drop Rate: 0.00% (zero-loss guarantee)` pipe statistic. Contract: `AGENTS.md`, API `GET /sync-status`, schema notes.
+- **API process does not write ID=1** — Scan stack (`BaseBlockSource`, `RpcConcurrencyGovernor`, …) is `@ConditionalOnIndexerEnabled`. API-only uses `DirectRpcPermitPort` for Genesis Trace RPC.
+
 - **Per-project plans** — Flyway `V2__project_plan_quotas.sql`: `plan`, `daily_request_quota` (BUILDER default 2000), `watchlist_limit` (default 50).
 - **Atomic daily quota** — `DailyApiUsageLedger` reserves with `ON CONFLICT … WHERE request_count < quota`; non-2xx responses refund the admit.
 - **Watchlist cap** — Writes fail when the project address cap is reached. Occupancy is reserved atomically (`project_watchlist_usage`, Flyway **V3**) with `ON CONFLICT … WHERE address_count < watchlist_limit`; failed inserts and deletes refund the slot.

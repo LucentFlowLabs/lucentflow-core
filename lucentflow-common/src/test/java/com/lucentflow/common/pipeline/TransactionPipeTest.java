@@ -72,7 +72,10 @@ class TransactionPipeTest {
         String stats = transactionPipe.getStatistics();
         
         assertThat(stats).contains("Backpressure-Aware");
-        assertThat(stats).contains("Total Processed: 1");
+        assertThat(stats).contains("Total Enqueued: 1");
+        assertThat(stats).contains("at-most-once");
+        assertThat(stats).doesNotContain("Drop Rate");
+        assertThat(stats).doesNotContain("zero-loss");
     }
 
     @Test

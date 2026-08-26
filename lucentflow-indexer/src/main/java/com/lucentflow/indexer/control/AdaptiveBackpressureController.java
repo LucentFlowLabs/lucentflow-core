@@ -1,5 +1,6 @@
 package com.lucentflow.indexer.control;
 
+import com.lucentflow.indexer.config.ConditionalOnIndexerEnabled;
 import com.lucentflow.indexer.config.IndexerRpcProfile;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -15,6 +16,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Slf4j
 @Component
+@ConditionalOnIndexerEnabled
 public class AdaptiveBackpressureController {
 
     private final IndexerRpcProfile profile;

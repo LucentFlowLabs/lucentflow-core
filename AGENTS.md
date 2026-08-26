@@ -33,9 +33,9 @@ Java 21 (Virtual Threads), Spring Boot 3.4, Maven 3.9, PostgreSQL 16, Generation
 
 ## Hard protocols
 
-- **ID 1 Protocol:** read and write only `sync_status.id = 1`. Never insert extra checkpoint rows. Progress updates must be **monotonic** (`GREATEST` / `WHERE last_scanned_block < :n`), never an unconditional overwrite that can regress height.
+- **ID 1 Protocol:** read and write only `sync_status.id = 1`. Never insert extra checkpoint rows. Progress updates must be **monotonic** (`GREATEST` / `WHERE last_scanned_block < :n`), never an unconditional overwrite that can regress height. `last_scanned_block` is the enqueue high-water (whale candidates pushed onto `TransactionPipe`), not “UPSERT completed”.
 - **Native UPSERT:** persist whale rows with native SQL `ON CONFLICT (hash)` — do not use naive JPA `save` on the ingest path.
-- **Zero-loss pipe:** `TransactionPipe` is bounded; producers block, they do not drop.
+- **Pipe backpressure (in-process no-drop):** `TransactionPipe` is bounded; live producers **block**, they do not drop. Crash / SIGKILL after checkpoint and before UPSERT is **at-most-once** (those hashes are not re-scanned). Lost checkpoints reprocess via idempotent UPSERT (at-least-once). Do not claim a crash-safe 0% drop rate.
 - **RPC 429:** treat as pacing/backpressure. Do **not** fail over to the backup URL on 429.
 
 ## Layout (do not flatten)

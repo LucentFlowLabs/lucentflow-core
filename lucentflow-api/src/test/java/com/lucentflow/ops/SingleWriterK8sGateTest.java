@@ -27,6 +27,7 @@ class SingleWriterK8sGateTest {
 
     private static Path k8sDir;
     private static Path workerProfile;
+    private static Path apiProfile;
 
     @BeforeAll
     static void resolvePaths() {
@@ -37,8 +38,11 @@ class SingleWriterK8sGateTest {
         k8sDir = repoRoot.resolve("lucentflow-deployment").resolve("k8s");
         workerProfile = repoRoot.resolve("lucentflow-api")
                 .resolve("src/main/resources/application-worker.yml");
+        apiProfile = repoRoot.resolve("lucentflow-api")
+                .resolve("src/main/resources/application-api.yml");
         assertTrue(Files.isDirectory(k8sDir), "k8s dir missing: " + k8sDir);
         assertTrue(Files.isRegularFile(workerProfile), "worker profile missing: " + workerProfile);
+        assertTrue(Files.isRegularFile(apiProfile), "api profile missing: " + apiProfile);
     }
 
     @Test
@@ -114,6 +118,17 @@ class SingleWriterK8sGateTest {
                 "lucentflow-api Service must select component=api");
         assertFalse(hasLabel(svc, "component", "worker"),
                 "lucentflow-api Service must not select component=worker");
+    }
+
+    @Test
+    void apiSpringProfileDisablesIndexer() throws IOException {
+        String text = Files.readString(apiProfile);
+        assertMatches(text, "(?m)^[ \\t]*enable-indexer:\\s*false\\s*$",
+                "application-api.yml must set enable-indexer: false");
+        assertMatches(text, "(?m)^[ \\t]*enable-analyzer:\\s*false\\s*$",
+                "application-api.yml must set enable-analyzer: false");
+        assertMatches(text, "(?m)^[ \\t]*enable-api:\\s*true\\s*$",
+                "application-api.yml must set enable-api: true");
     }
 
     @Test

@@ -16,8 +16,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * High-performance, Backpressure-aware Transaction Pipe.
- * Designed for Java 21 Virtual Threads and high-throughput L2 monitoring.
+ * Bounded, backpressure-aware transaction pipe for Java 21 virtual threads.
+ *
+ * <p><strong>In-process:</strong> {@link #push} blocks when full; live producers do not drop.
+ * {@link #stopAccepting()} rejects further pushes (shutdown), which is not a live drop.</p>
+ *
+ * <p><strong>Crash:</strong> the pipe is not a WAL. After {@code sync_status} advances,
+ * a kill before analyzer UPSERT is <strong>at-most-once</strong> for those hashes.
+ * Do not report a 0% drop rate as crash-safe exactly-once.</p>
  *
  * @author ArchLucent
  * @since 1.0
@@ -120,9 +126,10 @@ public class TransactionPipe {
         return String.format(
                 "TransactionPipe Statistics (Backpressure-Aware):\n" +
                 "- Current Size: %d / %d (%.1f%% full)\n" +
-                "- Total Processed: %d\n" +
+                "- Total Enqueued: %d\n" +
                 "- Backpressure Events: %d\n" +
-                "- Drop Rate: 0.00%% (zero-loss guarantee)",
+                "- In-process: blocking enqueue (no live drop)\n" +
+                "- Crash: at-most-once after checkpoint (pipe is not WAL)",
                 queue.size(), QUEUE_CAPACITY, fillRate,
                 totalProcessed.get(),
                 backpressureEvents.get()

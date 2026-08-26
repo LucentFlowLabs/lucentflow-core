@@ -2,8 +2,8 @@ package com.lucentflow.indexer.service;
 
 import com.lucentflow.common.constant.RugRiskLevel;
 import com.lucentflow.common.entity.WhaleTransaction;
-import com.lucentflow.indexer.source.BaseBlockSource;
 import com.lucentflow.pipeline.FundingTracerPort;
+import com.lucentflow.pipeline.RpcPermitPort;
 import com.lucentflow.pipeline.GenesisTraceOutcome;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,7 +45,7 @@ import java.util.concurrent.Executors;
 /**
  * Stateless service for tracing contract creator funding sources and recursive
  * on-chain funding origins (Genesis Trace 2.0) using PostgreSQL recursive CTEs.
- * RPC paths use {@link BaseBlockSource#runWithRpcPermit} for unified backpressure.
+ * RPC paths use {@link RpcPermitPort#runWithRpcPermit} (indexer governor, or pass-through on API).
  *
  * @author ArchLucent
  * @since 1.0
@@ -60,7 +60,7 @@ public class CreatorFundingTracer implements FundingTracerPort {
     private final Web3j web3j;
     private final RestTemplate restTemplate;
     private final JdbcTemplate jdbcTemplate;
-    private final BaseBlockSource blockSource;
+    private final RpcPermitPort rpcPermit;
     private final ObjectMapper objectMapper;
 
     @Value("${lucentflow.basescan.api-key:}")
@@ -150,12 +150,12 @@ public class CreatorFundingTracer implements FundingTracerPort {
     public CreatorFundingTracer(Web3j web3j,
                                 RestTemplate restTemplate,
                                 JdbcTemplate jdbcTemplate,
-                                BaseBlockSource blockSource,
+                                RpcPermitPort rpcPermit,
                                 ObjectMapper objectMapper) {
         this.web3j = web3j;
         this.restTemplate = restTemplate;
         this.jdbcTemplate = jdbcTemplate;
-        this.blockSource = blockSource;
+        this.rpcPermit = rpcPermit;
         this.objectMapper = objectMapper;
     }
 
@@ -558,7 +558,7 @@ public class CreatorFundingTracer implements FundingTracerPort {
 
     private BigInteger getTransactionCount(String address) {
         try {
-            return blockSource.runWithRpcPermit(() -> {
+            return rpcPermit.runWithRpcPermit(() -> {
                 EthGetTransactionCount transactionCount = web3j.ethGetTransactionCount(
                         address, DefaultBlockParameter.valueOf("latest")).send();
                 if (transactionCount != null && transactionCount.getTransactionCount() != null) {

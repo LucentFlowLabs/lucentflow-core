@@ -1,4 +1,6 @@
 # API-only profile: serve REST without live indexing/analysis loops.
+# Scan stack (BaseBlockSource, RpcConcurrencyGovernor) is ConditionalOnIndexerEnabled —
+# this process must not write sync_status id=1.
 # java -jar lucentflow.jar --spring.profiles.active=api
 spring:
   lifecycle:

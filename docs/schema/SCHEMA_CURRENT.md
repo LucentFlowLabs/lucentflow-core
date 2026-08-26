@@ -88,6 +88,7 @@ erDiagram
 
 - Exactly one checkpoint row with `id = 1` (`CHECK (id = 1)`).
 - V1 seeds `(id=1, last_scanned_block=0, sync_status='ACTIVE')`.
+- `last_scanned_block` is the **enqueue** high-water (whale candidates pushed onto `TransactionPipe`), not UPSERT completion. Crash between checkpoint and persist is **at-most-once** for those hashes. A lost checkpoint reprocesses via idempotent `ON CONFLICT (hash)` (at-least-once).
 - `worker_leases` / `WorkerLeaseCoordinator` provide TTL leader election that gates indexer/analyzer when `lucentflow.lease.enabled=true`.
 - **Deploy policy:** still run a single worker replica until multi-replica failover is validated (lease is defense-in-depth).
 

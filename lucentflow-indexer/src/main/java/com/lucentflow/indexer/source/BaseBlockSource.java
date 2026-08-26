@@ -8,7 +8,9 @@ import com.lucentflow.indexer.config.IndexerRpcProfile;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.common.exception.RateLimitException;
 import com.lucentflow.common.repository.SyncStatusRepository;
+import com.lucentflow.indexer.config.ConditionalOnIndexerEnabled;
 import com.lucentflow.pipeline.BlockSourcePort;
+import com.lucentflow.pipeline.RpcPermitPort;
 import com.lucentflow.sdk.config.RpcProviderConfig;
 import com.lucentflow.sdk.config.RpcProviderType;
 import lombok.extern.slf4j.Slf4j;
@@ -46,16 +48,19 @@ import java.util.concurrent.Executors;
 import org.springframework.beans.factory.annotation.Value;
 
 /**
- * Source component for blockchain data extraction with zero-loss pipeline integration.
- * Handles polling logic for new blocks and transaction extraction.
- * Pushes all whale transactions to TransactionPipe for guaranteed processing.
- * 
+ * Source component for blockchain data extraction and pipe enqueue.
+ * Handles polling for new blocks and pushing whale candidates to {@code TransactionPipe}.
+ *
+ * <p>Indexer-only ({@link ConditionalOnIndexerEnabled}): this bean is the scan-path
+ * writer of {@code sync_status} id=1 (enqueue high-water). API replicas must not create it.</p>
+ *
  * @author ArchLucent
  * @since 1.0
  */
 @Slf4j
 @Component
-public class BaseBlockSource implements BlockSourcePort {
+@ConditionalOnIndexerEnabled
+public class BaseBlockSource implements BlockSourcePort, RpcPermitPort {
     
     private final Web3j web3j;
     private final SyncStatusRepository syncStatusRepository;
@@ -608,6 +613,7 @@ public class BaseBlockSource implements BlockSourcePort {
      * @param <T>    result type
      * @return action result
      */
+    @Override
     public <T> T runWithRpcPermit(Callable<T> action) {
         try {
             log.debug("[RPC-QUEUE] Threads waiting for permit: {}", rpcConcurrencyGovernor.getQueueLength());
@@ -627,10 +633,12 @@ public class BaseBlockSource implements BlockSourcePort {
     }
     
     /**
-     * Get transactions from a block and push whale transactions to TransactionPipe.
-     * Ensures zero-loss processing of all identified whale transactions.
+     * Get transactions from a block and push matching whale candidates to {@code TransactionPipe}.
+     * Live {@code push} blocks under backpressure. Shutdown {@code stopAccepting} rejects remaining
+     * pushes; the orchestrator must not checkpoint that block.
+     *
      * @param block Block to extract transactions from
-     * @return List of transactions
+     * @return all transactions in the block (not only whale candidates)
      */
     public List<Transaction> getTransactionsFromBlock(EthBlock.Block block) {
         List<Transaction> transactions = block.getTransactions().stream()

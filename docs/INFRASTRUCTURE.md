@@ -207,7 +207,7 @@ LucentFlow uses a deterministic checkpoint strategy to eliminate redundant scann
   - If `sync_status.id=1.last_scanned_block > 0`, the indexer resumes from `last_scanned_block + 1`.
   - If the row is missing or `last_scanned_block = 0` (sentinel), the indexer falls back to `LUCENTFLOW_INDEXER_START_BLOCK` (first boot only), otherwise `latest - 10`.
 
-This protocol ensures the pipeline can restart deterministically without re-indexing large ranges, while still allowing an explicit first-boot checkpoint via `.env`.
+This protocol ensures the pipeline can restart without re-scanning large ranges that were already enqueued. `last_scanned_block` is enqueue high-water, not UPSERT completion: a crash after checkpoint and before analyzer persist is **at-most-once** for those hashes. A lost checkpoint is **at-least-once** (idempotent `ON CONFLICT (hash)`). First boot still uses `.env` `LUCENTFLOW_INDEXER_START_BLOCK` when the sentinel is `0`.
 
 ---
 

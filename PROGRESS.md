@@ -19,7 +19,7 @@ LucentFlow 已从 Base L2 **链上哨兵**演进为具备 **B2B 多租户产品�
 
 | 维度 | 评级 | 说明 |
 |------|------|------|
-| 索引与 checkpoint | ★★★★★ | ID=1 Protocol + DB `CHECK (id = 1)` + 单调 `GREATEST` |
+| 索引与 checkpoint | ★★★★☆ | ID=1 Protocol + DB `CHECK (id = 1)` + 单调 `GREATEST`。`last_scanned_block` 是**入队**高水位；崩溃在 UPSERT 前为 at-most-once |
 | 风险分析 / Anti-Rug | ★★★★☆ | RiskEngine.complete 为 ingest/API 共用收尾；点查始终拉 receipt+genesis，ingest 可跳过 |
 | B2B 多租户 API | ★★★★☆ | 项目无 DELETE（软关：`PUT /api/v1/admin/projects/{id}` body `isActive`）；hashed Key / 规则 / V2 plan 配额 / V3 watchlist 占用 / 取证隔离已 wired |
 | 告警投递 | ★★★★☆ | HMAC Webhook 按项目；Discord / Telegram 显式 global-only；bulkhead 超时进内存死信再重试 |
@@ -87,8 +87,8 @@ flowchart LR
 
 **Hard protocols (enforced in code + schema):**
 
-- **ID=1 Protocol** — all sync read/write targets `sync_status.id = 1` (`CHECK (id = 1)` in Flyway V1)；进度用 `GREATEST`，禁止无条件覆盖回退高度。
-- **Zero-loss pipe** — bounded `TransactionPipe` (capacity 5000)；运行期 producer 阻塞不丢。Analyzer 对已 drain 批次 **UPSERT 重试至成功**；关停先等 workers 排空（默认 120s），再在 `SmartLifecycle.stop` 线程 **last-chance flush**。`TransactionPipe.@PreDestroy` 若仍有剩余则 ERROR 并清空（JVM 正在退出；analyzer 应已 flush）。K8s worker `terminationGracePeriodSeconds: 180` 与 worker / 默认进程 `timeout-per-shutdown-phase: 180s` 对齐；**API-only** profile 为 30s（无 pipe 排空）。
+- **ID=1 Protocol** — all sync read/write targets `sync_status.id = 1` (`CHECK (id = 1)` in Flyway V1)；进度用 `GREATEST`，禁止无条件覆盖回退高度。`last_scanned_block` 是 whale 候选**入队**高水位，不是 UPSERT 完成。
+- **Pipe（进程内不丢 / 崩溃 at-most-once）** — bounded `TransactionPipe` (capacity 5000)；运行期 producer **阻塞**不丢。Analyzer 对已 drain 批次 **UPSERT 重试至成功**。checkpoint 在入队后前进：kill / OOM 在 UPSERT 前对那些 hash 是 **at-most-once**（不会重扫）。丢失的 checkpoint 才走幂等 UPSERT 重放（at-least-once）。关停先等 workers 排空（默认 120s），再在 `SmartLifecycle.stop` 线程 **last-chance flush**。`TransactionPipe.@PreDestroy` 若仍有剩余则 ERROR 并清空（JVM 正在退出；analyzer 应已 flush）。K8s worker `terminationGracePeriodSeconds: 180` 与 worker / 默认进程 `timeout-per-shutdown-phase: 180s` 对齐；**API-only** profile 为 30s（无 pipe 排空）。
 - **Native UPSERT** — whale persistence via `ON CONFLICT (hash)`；ingest 热路径不用 JPA `save`。
 - **RPC 429** — pacing / backpressure；**不** failover 到 backup URL。
 - **Virtual Threads** — indexer parallelism, analysis workers, webhook dispatch, risk-score lookups（配额计量走请求线程上的 JDBC，无独立 VT 池）。
@@ -155,7 +155,7 @@ flowchart LR
 
 | Domain | Done | In progress | Gap |
 |--------|------|-------------|-----|
-| Block index + ID=1 checkpoint | ● | | |
+| Block index + ID=1 checkpoint | ● | | 入队高水位；崩溃 at-most-once |
 | RPC tier / failover / backpressure | ● | | |
 | RiskEngine + funding / rug signals | ● | | 点查 fetch 比 ingest 更全（契约已标明） |
 | ERC-20 + bytecode clone signals | ● | | Core-token 列表有限 |
@@ -185,6 +185,8 @@ Includes former Open items 4–8 and 32–33.
 
 | When | What landed | Evidence |
 |------|-------------|----------|
+| 2026-08-26 | 契约：pipe 进程内不丢；checkpoint 后崩溃 at-most-once；去掉 Drop Rate 0% | `AGENTS.md`；`TransactionPipe.getStatistics`；enqueue 高水位注释 |
+| 2026-08-26 | API 进程不写 ID=1 | `ConditionalOnIndexerEnabled` + `DirectRpcPermitPort` |
 | 2026-08-26 | 日配额拒绝退分钟桶；Webhook bulkhead 超时进死信 | `SharedRateLimitService.release`；死信容量 500 / 最多 8 次 / 500ms drain |
 | 2026-08-25 | Ingress 对齐、UPSERT 重试至成功、`RiskEngine.complete` | `WhaleIngressFilter`；`persistThenAlertUntilSuccess`；点查 fetch 更深（契约已标明） |
 | 2026-08-25 | 日配额 / watchlist 占用原子预占 | `DailyApiUsageLedger`；`WatchlistCapLedger` + Flyway V3 |
@@ -252,7 +254,7 @@ Count as of **2026-08-26**: unique `*Test.java` / `*IT.java` under each module `
 
 ## 9. Conclusion
 
-模块边界对哨兵单体足够清晰；硬协议（ID=1、UPSERT、VT、429 不切 backup）在代码与 schema 中一致。hashed Project Key + watchlist 取证 + V2/V3 配额是可用的 SaaS MVP。
+模块边界对哨兵单体足够清晰；硬协议（ID=1 入队高水位、UPSERT、VT、429 不切 backup、崩溃 at-most-once）在代码与 schema 中一致。hashed Project Key + watchlist 取证 + V2/V3 配额是可用的 SaaS MVP。
 
 下一步只维护 **§1 Current board**。
 

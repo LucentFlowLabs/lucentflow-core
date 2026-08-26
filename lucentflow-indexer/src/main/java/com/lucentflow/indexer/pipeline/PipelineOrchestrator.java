@@ -3,6 +3,7 @@ package com.lucentflow.indexer.pipeline;
 import com.lucentflow.common.lease.LeadershipGate;
 import com.lucentflow.common.pipeline.TransactionPipe;
 import com.lucentflow.indexer.control.AdaptiveBackpressureController;
+import com.lucentflow.indexer.config.ConditionalOnIndexerEnabled;
 import com.lucentflow.indexer.config.IndexerRpcProfile;
 import com.lucentflow.indexer.config.RpcConcurrencyGovernor;
 import com.lucentflow.common.repository.SyncStatusRepository;
@@ -13,7 +14,6 @@ import com.lucentflow.sdk.config.RpcEndpointState;
 import com.lucentflow.sdk.config.RpcProviderType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -28,23 +28,20 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
 import org.springframework.context.SmartLifecycle;
+
 /**
- * High-throughput blockchain indexing pipeline orchestrator with zero-loss guarantees.
- * 
- * <p>Implementation Details:
- * Coordinates complete indexing flow: Source → Transformer → Sink → Sync Status Update.
- * Implements adaptive parallel/sequential processing based on block volume.
- * Semaphore-controlled RPC concurrency prevents rate limiting and ensures backpressure management.
- * Virtual thread compatible with structured concurrency and proper resource cleanup.
- * Zero-loss guarantee through atomic transaction boundaries and comprehensive error handling.
- * </p>
- * 
+ * High-throughput blockchain indexing pipeline orchestrator.
+ *
+ * <p>Coordinates scan → pipe enqueue → ID=1 checkpoint. Checkpoint height is the
+ * enqueue high-water; analyzer UPSERT runs asynchronously. Live pipe enqueue is
+ * blocking (no drop). Crash after checkpoint and before UPSERT is at-most-once.</p>
+ *
  * @author ArchLucent
  * @since 1.0
  */
 @Slf4j
 @Service
-@ConditionalOnProperty(name = "lucentflow.runtime.enable-indexer", havingValue = "true", matchIfMissing = true)
+@ConditionalOnIndexerEnabled
 public class PipelineOrchestrator implements SmartLifecycle {
     
     private final BaseBlockSource blockSource;
@@ -121,7 +118,7 @@ public class PipelineOrchestrator implements SmartLifecycle {
      * 
      * <p>Runs on a short scheduler tick; {@link AdaptiveBackpressureController} enforces effective polling
      * (primary vs backup failover pacing). Uses adaptive processing strategy based on block volume.
-     * Transaction boundaries ensure zero-loss guarantee across the entire operation.</p>
+     * Checkpoint after a successful chunk means whale candidates were enqueued, not that UPSERT finished.</p>
      * 
      * @throws RuntimeException if critical pipeline components fail
      */
@@ -215,9 +212,9 @@ public class PipelineOrchestrator implements SmartLifecycle {
                     break;
                 }
                 
-                // CHECKPOINT: persist progress using ID 1 Protocol after each chunk.
-                // Async checkpoint reduces idle time between chunks; losing a checkpoint only
-                // causes reprocessing (idempotent upsert), not data loss.
+                // CHECKPOINT: ID=1 enqueue high-water after each successful chunk.
+                // A lost checkpoint only causes at-least-once reprocessing (idempotent UPSERT).
+                // Crash after this write and before analyzer UPSERT is at-most-once for those hashes.
                 // SQL is monotonic (GREATEST) so out-of-order completions cannot regress height.
                 if (isShuttingDown.get()) {
                     log.info("Pipeline shutdown requested. Skipping checkpoint submission for chunkEnd={}.", chunkEnd);
@@ -380,13 +377,11 @@ public class PipelineOrchestrator implements SmartLifecycle {
     }
     
     /**
-     * Processes a single block through the complete indexing pipeline.
-     * 
-     * <p>Flow: Fetch block → Extract transactions → Transform whale transactions →
-     * Persist to database. All operations are atomic to ensure data integrity.</p>
-     * 
-     * @param blockNumber Block number to process
-     * @throws RuntimeException if block fetching, transformation, or persistence fails
+     * Fetches one block and enqueues whale candidates. Persistence is asynchronous
+     * in the analyzer; returning {@code true} only means fetch+enqueue succeeded.
+     *
+     * @param blockNumber block to fetch
+     * @return {@code false} on soft-fail (do not checkpoint)
      */
     private boolean processBlock(long blockNumber) {
         try {
@@ -460,15 +455,15 @@ public class PipelineOrchestrator implements SmartLifecycle {
     }
     
     /**
-     * Updates synchronization status after successful block processing.
+     * Updates ID=1 after a chunk's whale candidates were pushed onto {@link TransactionPipe}.
      *
-     * <p>Called only after all blocks in the range are successfully processed.
+     * <p>{@code lastProcessedBlock} is enqueue high-water, not UPSERT completion.
      * Chunks submit this asynchronously; {@code updateProgress} / {@code upsertProgress}
      * apply {@code GREATEST} so a later-finishing older chunk cannot regress
      * {@code last_scanned_block}.</p>
      *
-     * @param lastProcessedBlock The highest block number successfully processed
-     * @throws RuntimeException if status update fails (critical error)
+     * @param lastProcessedBlock highest block whose whale candidates were enqueued
+     * @param targetEndBlock     scan-range end (logging / heartbeat only)
      */
     private void checkpointProgress(long lastProcessedBlock, long targetEndBlock) {
         try {

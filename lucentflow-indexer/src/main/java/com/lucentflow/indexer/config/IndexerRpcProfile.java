@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
  * @since 1.0
  */
 @Component
+@ConditionalOnIndexerEnabled
 public class IndexerRpcProfile {
 
     /** Hardcoded safe pacing for official Base public RPC (mainnet.base.org). */
