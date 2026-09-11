@@ -1,10 +1,18 @@
 package com.lucentflow.analyzer.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lucentflow.common.entity.Project;
 import com.lucentflow.common.entity.WhaleTransaction;
+import com.lucentflow.common.repository.ProjectRepository;
+import com.lucentflow.common.webhook.InMemoryWebhookDeadLetterStore;
+import com.lucentflow.common.webhook.WebhookDeadLetterRecord;
+import com.lucentflow.common.webhook.WebhookDeadLetterStore;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -20,9 +28,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -31,13 +38,14 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Generic outbound Webhook provider for high-risk alerts.
- * Bulkhead saturation enqueues a bounded in-memory dead-letter for retry.
+ * Bulkhead saturation enqueues a bounded dead-letter (PostgreSQL in production) for retry.
  *
  * @author ArchLucent
  * @since 1.0
  */
 @Slf4j
 @Service
+@ConditionalOnProperty(name = "lucentflow.runtime.enable-analyzer", havingValue = "true", matchIfMissing = true)
 public class WebhookAlertProvider implements AlertProvider {
 
     private static final int MAX_ATTEMPTS = 3;
@@ -45,6 +53,8 @@ public class WebhookAlertProvider implements AlertProvider {
     private static final ExecutorService WEBHOOK_EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
     private static final String SIGNATURE_HEADER = "X-LucentFlow-Signature";
     private static final String HMAC_SHA256 = "HmacSHA256";
+    private static final TypeReference<LinkedHashMap<String, Object>> MAP_TYPE = new TypeReference<>() {
+    };
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -53,40 +63,33 @@ public class WebhookAlertProvider implements AlertProvider {
     private final WebhookDeliveryStatusTracker deliveryStatusTracker;
     private final Semaphore webhookBulkhead;
     private final long bulkheadAcquireTimeoutMs;
-    private final BlockingQueue<DeadLetterItem> deadLetter;
+    private final WebhookDeadLetterStore deadLetterStore;
+    private final ProjectRepository projectRepository;
     private final int deadLetterMaxAttempts;
-
-    /**
-     * In-memory retry after bulkhead saturation. Bounded so a down webhook cannot OOM the worker.
-     *
-     * @param tx       whale that still needs delivery
-     * @param context  dispatch metadata (project URL / HMAC)
-     * @param attempts DLQ cycles already used (1 after the first bulkhead miss)
-     */
-    record DeadLetterItem(WhaleTransaction tx, AlertDispatchContext context, int attempts) {
-    }
 
     @Autowired
     public WebhookAlertProvider(
             ObjectMapper objectMapper,
             WebhookDeliveryStatusTracker deliveryStatusTracker,
+            WebhookDeadLetterStore deadLetterStore,
+            ObjectProvider<ProjectRepository> projectRepository,
             @Value("${lucentflow.webhook.url:}") String webhookUrl,
             @Value("${lucentflow.webhook.secret-token:}") String secretToken,
             @Value("${lucentflow.webhook.connect-timeout-ms:5000}") long connectTimeoutMs,
             @Value("${lucentflow.webhook.bulkhead-permits:50}") int bulkheadPermits,
             @Value("${lucentflow.webhook.bulkhead-acquire-timeout-ms:10000}") long bulkheadAcquireTimeoutMs,
-            @Value("${lucentflow.webhook.dead-letter-capacity:500}") int deadLetterCapacity,
             @Value("${lucentflow.webhook.dead-letter-max-attempts:8}") int deadLetterMaxAttempts
     ) {
         this(
                 objectMapper,
                 deliveryStatusTracker,
+                deadLetterStore,
+                projectRepository.getIfAvailable(),
                 webhookUrl,
                 secretToken,
                 connectTimeoutMs,
                 new Semaphore(Math.max(1, bulkheadPermits)),
                 Math.max(0L, bulkheadAcquireTimeoutMs),
-                Math.max(1, deadLetterCapacity),
                 Math.max(1, deadLetterMaxAttempts)
         );
     }
@@ -124,13 +127,40 @@ public class WebhookAlertProvider implements AlertProvider {
             int deadLetterCapacity,
             int deadLetterMaxAttempts
     ) {
+        this(
+                objectMapper,
+                deliveryStatusTracker,
+                new InMemoryWebhookDeadLetterStore(deadLetterCapacity),
+                null,
+                webhookUrl,
+                secretToken,
+                connectTimeoutMs,
+                webhookBulkhead,
+                bulkheadAcquireTimeoutMs,
+                deadLetterMaxAttempts
+        );
+    }
+
+    WebhookAlertProvider(
+            ObjectMapper objectMapper,
+            WebhookDeliveryStatusTracker deliveryStatusTracker,
+            WebhookDeadLetterStore deadLetterStore,
+            ProjectRepository projectRepository,
+            String webhookUrl,
+            String secretToken,
+            long connectTimeoutMs,
+            Semaphore webhookBulkhead,
+            long bulkheadAcquireTimeoutMs,
+            int deadLetterMaxAttempts
+    ) {
         this.objectMapper = objectMapper;
         this.deliveryStatusTracker = deliveryStatusTracker;
+        this.deadLetterStore = deadLetterStore;
+        this.projectRepository = projectRepository;
         this.webhookUrl = webhookUrl;
         this.secretToken = secretToken;
         this.webhookBulkhead = webhookBulkhead;
         this.bulkheadAcquireTimeoutMs = bulkheadAcquireTimeoutMs;
-        this.deadLetter = new ArrayBlockingQueue<>(Math.max(1, deadLetterCapacity));
         this.deadLetterMaxAttempts = Math.max(1, deadLetterMaxAttempts);
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.max(1000L, connectTimeoutMs)))
@@ -238,17 +268,25 @@ public class WebhookAlertProvider implements AlertProvider {
     @Scheduled(fixedDelayString = "${lucentflow.webhook.dead-letter-drain-ms:500}")
     void drainDeadLetter() {
         int budget = 16;
-        while (budget-- > 0) {
-            DeadLetterItem item = deadLetter.poll();
-            if (item == null) {
-                return;
-            }
-            doSendWithRetry(item.tx(), item.context(), item.attempts());
+        List<WebhookDeadLetterRecord> batch;
+        try {
+            batch = deadLetterStore.pollDue(budget);
+        } catch (RuntimeException e) {
+            log.warn("[WEBHOOK] Dead-letter drain failed: {}", e.getMessage());
+            return;
+        }
+        for (WebhookDeadLetterRecord item : batch) {
+            doSendWithRetry(hydrateTransaction(item), hydrateContext(item), item.attempts());
         }
     }
 
     int deadLetterSize() {
-        return deadLetter.size();
+        try {
+            return deadLetterStore.size();
+        } catch (RuntimeException e) {
+            log.debug("[WEBHOOK] Dead-letter size unavailable: {}", e.getMessage());
+            return 0;
+        }
     }
 
     private void enqueueDeadLetter(WhaleTransaction tx, AlertDispatchContext context, int nextAttempts) {
@@ -257,7 +295,31 @@ public class WebhookAlertProvider implements AlertProvider {
             deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
             return;
         }
-        if (!deadLetter.offer(new DeadLetterItem(tx, context, nextAttempts))) {
+        String targetUrl = resolveTargetWebhookUrl(context);
+        if (targetUrl == null) {
+            return;
+        }
+        WebhookDeadLetterRecord record = new WebhookDeadLetterRecord(
+                null,
+                tx.getHash(),
+                context == null ? null : context.projectId(),
+                targetUrl,
+                context != null && context.watchlistHit(),
+                context == null ? null : context.watchlistLabel(),
+                context == null ? null : context.watchlistCategory(),
+                context == null ? null : context.watchlistAddress(),
+                snapshotPayload(tx),
+                nextAttempts
+        );
+        boolean accepted;
+        try {
+            accepted = deadLetterStore.enqueue(record);
+        } catch (RuntimeException e) {
+            log.error("[WEBHOOK] Dead-letter persist failed tx={}", tx.getHash(), e);
+            deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
+            return;
+        }
+        if (!accepted) {
             log.error("[WEBHOOK] Dead-letter full; dropping tx={}", tx.getHash());
             deliveryStatusTracker.markFailure(context == null ? null : context.projectId());
         }
@@ -265,9 +327,10 @@ public class WebhookAlertProvider implements AlertProvider {
 
     @PreDestroy
     void logPendingDeadLetters() {
-        int remaining = deadLetter.size();
+        int remaining = deadLetterSize();
         if (remaining > 0) {
-            log.error("[WEBHOOK] Destroying with {} undelivered dead-letter webhook(s)", remaining);
+            log.warn("[WEBHOOK] Shutdown with {} undelivered dead-letter(s); they persist in webhook_dead_letters",
+                    remaining);
         }
     }
 
@@ -289,6 +352,75 @@ public class WebhookAlertProvider implements AlertProvider {
         riskAssessment.put("reasons", tx.getRiskReasons() == null ? Map.of() : tx.getRiskReasons());
         payload.put("risk_assessment", riskAssessment);
         return payload;
+    }
+
+    private String snapshotPayload(WhaleTransaction tx) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("hash", tx.getHash());
+        snapshot.put("riskScore", tx.getRiskScore());
+        snapshot.put("rugRiskLevel", tx.getRugRiskLevel());
+        snapshot.put("riskReasons", tx.getRiskReasons() == null ? Map.of() : tx.getRiskReasons());
+        try {
+            return objectMapper.writeValueAsString(snapshot);
+        } catch (Exception e) {
+            return "{\"hash\":\"" + (tx.getHash() == null ? "" : tx.getHash()) + "\"}";
+        }
+    }
+
+    private WhaleTransaction hydrateTransaction(WebhookDeadLetterRecord record) {
+        Map<String, Object> snapshot = Map.of();
+        if (record.payloadJson() != null && !record.payloadJson().isBlank()) {
+            try {
+                snapshot = objectMapper.readValue(record.payloadJson(), MAP_TYPE);
+            } catch (Exception ignored) {
+                snapshot = Map.of();
+            }
+        }
+        Object scoreRaw = snapshot.get("riskScore");
+        Integer score = scoreRaw instanceof Number n ? n.intValue() : null;
+        Object reasonsRaw = snapshot.get("riskReasons");
+        Map<String, Integer> reasons = new LinkedHashMap<>();
+        if (reasonsRaw instanceof Map<?, ?> rawMap) {
+            for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
+                if (entry.getKey() == null) {
+                    continue;
+                }
+                Integer value = entry.getValue() instanceof Number n ? n.intValue() : null;
+                reasons.put(String.valueOf(entry.getKey()), value);
+            }
+        }
+        Object levelRaw = snapshot.get("rugRiskLevel");
+        return WhaleTransaction.builder()
+                .hash(record.txHash())
+                .riskScore(score)
+                .rugRiskLevel(levelRaw instanceof String s ? s : null)
+                .riskReasons(reasons)
+                .build();
+    }
+
+    private AlertDispatchContext hydrateContext(WebhookDeadLetterRecord record) {
+        String url = record.webhookUrl();
+        String secret = null;
+        if (record.projectId() != null && projectRepository != null) {
+            Project project = projectRepository.findById(record.projectId()).orElse(null);
+            if (project != null) {
+                if (project.getWebhookUrl() != null && !project.getWebhookUrl().isBlank()) {
+                    url = project.getWebhookUrl().trim();
+                }
+                if (project.getWebhookSecret() != null && !project.getWebhookSecret().isBlank()) {
+                    secret = project.getWebhookSecret().trim();
+                }
+            }
+        }
+        return new AlertDispatchContext(
+                record.watchlistHit(),
+                record.watchlistLabel(),
+                record.watchlistCategory(),
+                record.watchlistAddress(),
+                record.projectId(),
+                url,
+                secret
+        );
     }
 
     /**

@@ -14,11 +14,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * Contributes RPC reachability to {@code /actuator/health} so operators can distinguish
- * database-up from JSON-RPC-up. Never throws: all failures become {@link Health#down()}
- * so the actuator layer can still serialize the response (HTTP status is configured separately).
- * Includes {@code PROXY_HOST}/{@code PROXY_PORT} on failure paths so timeouts can be correlated
- * with outbound proxy misconfiguration.
+ * Contributes RPC reachability to the operator aggregate {@code /actuator/health}.
+ * It is <strong>not</strong> part of Kubernetes liveness/readiness groups: RPC DOWN must not
+ * restart the worker (in-memory pipe is at-most-once) or take API pods out of rotation.
+ * Never throws: all failures become {@link Health#down()} so the actuator layer can still
+ * serialize the response. Includes {@code PROXY_HOST}/{@code PROXY_PORT} on failure paths so
+ * timeouts can be correlated with outbound proxy misconfiguration.
  *
  * @author ArchLucent
  * @since 1.1

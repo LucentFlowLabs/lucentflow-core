@@ -195,3 +195,21 @@ CREATE TABLE IF NOT EXISTS api_rate_limit_buckets (
     request_count BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (bucket_key, epoch_minute)
 );
+
+-- Added in Flyway V4 (webhook dead-letter out of process)
+CREATE TABLE IF NOT EXISTS webhook_dead_letters (
+    id                   BIGSERIAL PRIMARY KEY,
+    tx_hash              VARCHAR(66) NOT NULL,
+    project_id           BIGINT,
+    webhook_url          VARCHAR(1024) NOT NULL,
+    watchlist_hit        BOOLEAN NOT NULL DEFAULT FALSE,
+    watchlist_label      VARCHAR(120),
+    watchlist_category   VARCHAR(40),
+    watchlist_address    VARCHAR(42),
+    payload_json         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    attempts             INT NOT NULL DEFAULT 1,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_webhook_dead_letters_attempts CHECK (attempts >= 0)
+);
+

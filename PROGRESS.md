@@ -22,9 +22,9 @@ LucentFlow 已从 Base L2 **链上哨兵**演进为具备 **B2B 多租户产品�
 | 索引与 checkpoint | ★★★★☆ | ID=1 Protocol + DB `CHECK (id = 1)` + 单调 `GREATEST`。`last_scanned_block` 是**入队**高水位；崩溃在 UPSERT 前为 at-most-once |
 | 风险分析 / Anti-Rug | ★★★★☆ | RiskEngine.complete 为 ingest/API 共用收尾；点查始终拉 receipt+genesis，ingest 可跳过 |
 | B2B 多租户 API | ★★★★☆ | 项目无 DELETE（软关：`PUT /api/v1/admin/projects/{id}` body `isActive`）；hashed Key / 规则 / V2 plan 配额 / V3 watchlist 占用 / 取证隔离已 wired |
-| 告警投递 | ★★★★☆ | HMAC Webhook 按项目；Discord / Telegram 显式 global-only；bulkhead 超时进内存死信再重试 |
-| 安全与运营硬化 | ★★★☆☆ | 双 Key 拦截器 + 分钟桶 / 日配额 / watchlist 占用均为原子预占；无 RBAC |
-| 测试与可演进性 | ★★★☆☆ | 截至本评审日 47 个 `*Test`/`*IT` 类（含 2 个 Testcontainers IT）。有 shutdown 单测，缺全进程关停 IT |
+| 告警投递 | ★★★★☆ | HMAC Webhook 按项目；Discord / Telegram 显式 global-only；bulkhead 超时进 Postgres 死信再重试 |
+| 安全与运营硬化 | ★★★★☆ | 双 Key 拦截器 + 分钟桶 / 日配额 / watchlist 占用均为原子预占；liveness≠RPC；无 RBAC |
+| 测试与可演进性 | ★★★★☆ | 全进程关停 IT + Flyway V4 死信 persist IT。Webhook 死信出进程；探针拆分 liveness/readiness |
 | 部署形态 | ★★★★☆ | Docker Compose + K8s api/worker 拆分（worker `replicas: 1`）；Neo4j 仅为 compose 占位 |
 
 ### Current board (single source of open work)
@@ -35,9 +35,6 @@ Update this table when a row ships. Do not copy these rows into §5.
 
 | P | Item | Done when |
 |---|------|-----------|
-| P3 | 全进程 SmartLifecycle 关停 IT | 有 IT 覆盖 indexer+analyzer 停机时 pipe drain + last-chance flush（现有仅为 `WhaleAnalysisWorkerShutdownTest`） |
-| P3 | Webhook 死信落盘或出进程 | 重启不丢未投递项，或 runbook 明确接受内存队列丢失 |
-| P3 | Health 探针策略 | 要么接受 `jsonRpc` DOWN / webhook `WARN` 不踢 pod，要么改探针去解析 JSON（今日 `/actuator/health` HTTP 200 mapping，kubelet 不读 body） |
 | P4 | AlertRule 增量缓存 | upsert 后热路径不再全表 `findAll` 刷新 |
 | P4 | Project 硬删 | `DELETE /api/v1/admin/projects/{id}` 落地，或文档标明 MVP 只做 `PUT /{id}` body `isActive` 软关 |
 | P4 | RBAC + 审计 | 正式角色模型 + 审计日志，或文档标明 MVP 不做 |
@@ -129,7 +126,7 @@ flowchart LR
 | Commercial plans | ✅ Done | Flyway **V2** `plan` / `daily_request_quota` / `watchlist_limit`（BUILDER 2000/50，DESK 20000/200，PROTOCOL 100000/1000） |
 | On-demand Risk Score | ✅ Done | `POST /api/v1/risk/score`；`RiskEngine.complete`；点查 fetch 更深（契约已标明） |
 | sync_status singleton | ✅ Done | `CHECK (id = 1)` + poller deletion |
-| Docs / CHANGELOG / demo_setup | ✅ Done | SCHEMA V2+V3；CHANGELOG Unreleased webhook 死信；API topology 全局边 + health HTTP 200 mapping |
+| Docs / CHANGELOG / demo_setup | ✅ Done | SCHEMA V2+V3+V4；CHANGELOG Unreleased webhook 死信落盘 + 探针拆分；API topology 全局边 |
 | B2B unit tests | ✅ Done | Auth / quota / cache / persist-then-alert / topology miss+hit |
 | API key at-rest hashing | ✅ Done | SHA-256 `api_key_hash` + prefix |
 | Public `/whales` product decision | ✅ Done | Free tier + IP soft limit |
@@ -143,7 +140,7 @@ flowchart LR
 | Genesis Trace 3.0 topology (Postgres) | ✅ Landed | `funding_edges` + `GET /forensics/topology/{address}`（watchlist 门控查询地址，边为全局图） |
 | ETH/USD oracle | ✅ Landed | `GET /api/v1/oracle/eth-usd` |
 | Runtime split + K8s manifests | ✅ Landed | `api` / `worker` profiles；worker `replicas: 1` + Recreate + deny-ingress |
-| Worker probes | ✅ Landed | `/actuator/health` readiness/liveness（HTTP 200 mapping；见 §1 Current board / §7） |
+| Worker probes | ✅ Landed | liveness `/actuator/health/liveness`；readiness `/actuator/health/readiness`（db only；jsonRpc 不进探针） |
 | CI + Testcontainers | ✅ Landed | `mvn verify`；Flyway + forensic isolation ITs |
 | Neo4j Cypher sync | 🚀 Iterative | Compose profile + `Neo4jTopologyMirror` 占位；查询源仍是 Postgres |
 | Broader multi-asset / price feeds | 🚀 Iterative | ERC-20 outpost 仅 core token 列表 |
@@ -164,7 +161,7 @@ flowchart LR
 | Commercial plan + per-project quota columns | ● | | |
 | Watchlist isolation + write cap | ● | | |
 | Alert rules + cache | ● | | Full-table refresh on upsert |
-| Webhook HMAC fan-out | ● | | Bulkhead 超时进有界内存死信；满队列 / 耗尽 attempts 才 ERROR |
+| Webhook HMAC fan-out | ● | | Bulkhead 超时进 Postgres `webhook_dead_letters`；满表 / 耗尽 attempts 才 ERROR |
 | Discord / Telegram | ● | | 显式 global-only；合并标签 |
 | Forensic query / export | ● | | 导出 SQL LIMIT 默认 10000 |
 | Topology (Postgres `funding_edges`) | ● | | 命中后边为全局图 |
@@ -172,7 +169,7 @@ flowchart LR
 | Public `/whales` | ● | | Free tier; IP soft rate-limited |
 | Event-driven `AnalysisOrchestrator` | | | Removed (dead path) |
 | Split deploy / K8s | ● | | Worker 单副本；HA failover 未验证 |
-| Analyzer & B2B tests | ● | | 有 shutdown 单测，缺全进程关停 IT |
+| Analyzer & B2B tests | ● | | 全进程关停 IT + Flyway V4 死信 persist |
 | Neo4j graph sync | | ● | 占位，非查询源 |
 
 ---
@@ -185,6 +182,7 @@ Includes former Open items 4–8 and 32–33.
 
 | When | What landed | Evidence |
 |------|-------------|----------|
+| 2026-09-11 | P3：全进程关停 IT；Webhook 死信落盘；Health 探针拆分 | `IndexerAnalyzerShutdownIT`；Flyway **V4** `webhook_dead_letters`；K8s liveness/readiness 与 jsonRpc 解耦 |
 | 2026-08-26 | 契约：pipe 进程内不丢；checkpoint 后崩溃 at-most-once；去掉 Drop Rate 0% | `AGENTS.md`；`TransactionPipe.getStatistics`；enqueue 高水位注释 |
 | 2026-08-26 | API 进程不写 ID=1 | `ConditionalOnIndexerEnabled` + `DirectRpcPermitPort` |
 | 2026-08-26 | 日配额拒绝退分钟桶；Webhook bulkhead 超时进死信 | `SharedRateLimitService.release`；死信容量 500 / 最多 8 次 / 500ms drain |
@@ -206,6 +204,7 @@ Former incremental V1–V21 history was **squashed** into a single greenfield ba
 | V1 | Full schema: whale, sync (ID=1), entity_tags, funding_edges, projects (hashed keys), watchlist, alert_rules, usage, worker_leases, api_rate_limit_buckets |
 | V2 | `projects.plan` (`BUILDER` / `DESK` / `PROTOCOL`) + `daily_request_quota` + `watchlist_limit`；`0` 禁用对应上限 |
 | V3 | `project_watchlist_usage` occupancy counter；create 原子预占、delete/失败退回 |
+| V4 | `webhook_dead_letters`；bulkhead 超时出进程；drain `DELETE … RETURNING` + `SKIP LOCKED` |
 
 已有行在 V2 中得到 BUILDER 默认值（2000 / 50），不会按历史意图回填更高套餐。
 
@@ -224,7 +223,7 @@ Former incremental V1–V21 history was **squashed** into a single greenfield ba
 **Operator notes:**
 
 - **Topology** — `GET /forensics/topology/{address}` 只门控**查询地址**。miss → 空边 + `scope=watchlist-miss`；命中后 inbound/outbound 是**全局** `funding_edges`（对端不必在本项目 watchlist）。任意地址评分用 `POST /risk/score`（不走 watchlist）。
-- **Health** — `GET /actuator/health` 聚合 JSON 可为 DOWN 或 WARN，HTTP 仍 **200**（`http-mapping` 含 `DOWN` / `OUT_OF_SERVICE` / `WARN`）。K8s 打该路径的探针**不会**因 `jsonRpc` DOWN 失败。RPC 可达时 webhook 近期失败会把同一 indicator 打成 **WARN**（`webhookDelivery*` 字段）。要拦流量须解析 JSON 或改探针。
+- **Health** — Kubernetes liveness is `/actuator/health/liveness` (process only). Readiness is `/actuator/health/readiness` and includes **db** only — `jsonRpc` DOWN / webhook `WARN` **do not** take the pod out of rotation (killing the worker would drop the in-memory pipe). Operator aggregate `GET /actuator/health` still maps DOWN/WARN to **HTTP 200** so dashboards can parse JSON (`jsonRpc`, `webhookDelivery*`). Compose healthcheck uses readiness.
 - **Backfill** — `POST /admin/backfill` 在 indexer/worker；API-only 返回 503。K8s：`kubectl port-forward deploy/lucentflow-worker 8080:8080`。
 - **Shutdown** — worker / 默认进程 `timeout-per-shutdown-phase: 180s`（配合 pipe drain）；**API-only** profile 为 30s。
 
@@ -236,17 +235,17 @@ Product docs: [`docs/API-DOCUMENTATION.md`](docs/API-DOCUMENTATION.md)。
 
 ## 8. Test Coverage Snapshot
 
-Count as of **2026-08-26**: unique `*Test.java` / `*IT.java` under each module `src/test` (Windows path duplicates ignored). Recount after adding tests.
+Count as of **2026-09-11**: unique `*Test.java` / `*IT.java` under each module `src/test` (Windows path duplicates ignored). Recount after adding tests.
 
 | Module | Test classes | Notes |
 |--------|--------------|-------|
-| common | 11 | Pipe, ingress filter, crypto, lease, shared rate limit, daily usage ledger, watchlist occupancy ledger, `ProjectPlan` |
+| common | 12 | Pipe, ingress filter, crypto, lease, shared rate limit, daily usage ledger, watchlist occupancy ledger, `ProjectPlan`, webhook DLQ SQL |
 | indexer | 6 | RPC policy, governor, source, transformer, sink UPSERT, checkpoint GREATEST |
 | analyzer | 12 | Webhook gate, AlertService fan-out, persist-then-alert, **shutdown last-chance flush**, catch-up lag, RiskEngine, AddressLabeler, topology persist, shouldAlert 矩阵, Discord/Telegram 空配置 |
-| api | 17 | Quota, interceptors, specs, RiskScore live vs ingest, AlertRule MockMvc, Watchlist 原子 cap/`limit=0`/refund, topology miss+hit, **backfill 503/202**, K8s gate, 2× Testcontainers IT（含 V3） |
+| api | 19 | Quota, interceptors, specs, RiskScore live vs ingest, AlertRule MockMvc, Watchlist 原子 cap/`limit=0`/refund, topology miss+hit, **backfill 503/202**, K8s gate, **probe split**, **indexer+analyzer shutdown IT**, 2× Testcontainers IT（含 V4 死信 persist） |
 | chain-sdk | 1 | `RpcFailoverInterceptor`：429 不切 backup；500 才切 |
 | pipeline-contract | 0 | 端口模块，无运行时逻辑 |
-| **Total** | **47** | 有 shutdown 单测，缺全进程关停 IT。ITs 覆盖 Flyway V1–V3 + empty-watchlist |
+| **Total** | **50** | ITs 覆盖 Flyway V1–V4 + empty-watchlist + 关停相位 + 探针策略 |
 
 **Still thin:** 见 §1 Current board。
 

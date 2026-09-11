@@ -20,7 +20,7 @@ PostgreSQL TTL lease election (`worker_leases` / `WorkerLeaseCoordinator`) now g
 
 Violating the deploy gate still risks overlapping writers during lease expiry windows and corrupts `sync_status` **ID=1**.
 
-Worker readiness/liveness probes hit `/actuator/health` via the kubelet. That does not require a ClusterIP Service.
+Worker readiness/liveness probes hit `/actuator/health/readiness` and `/actuator/health/liveness` via the kubelet (Postgres for ready; process-only for live). They do **not** use `/actuator/health`, so `jsonRpc` DOWN does not restart the worker. That does not require a ClusterIP Service.
 
 `POST /api/v1/admin/backfill` lives on the **worker** (indexer) process. The API Service returns **503**. Invoke via port-forward (NetworkPolicy still blocks pod-to-pod ingress):
 

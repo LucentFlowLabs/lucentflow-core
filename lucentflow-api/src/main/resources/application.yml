@@ -130,8 +130,12 @@ logging:
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
     org.flywaydb: INFO
 
-# Actuator: keep HTTP 200 on /actuator/health even when a component is DOWN so upstream probes
-# (e.g. synthetic monitors, legacy load balancers) still receive a JSON body and can parse details.
+# Actuator health policy:
+#   /actuator/health            — operator aggregate (includes jsonRpc). HTTP 200 even when RPC is DOWN
+#                                 so dashboards still receive a JSON body.
+#   /actuator/health/liveness   — process liveness only (no RPC). Kubelet must use this path.
+#   /actuator/health/readiness  — Postgres only (no jsonRpc). RPC flap must not take the pod out of
+#                                 rotation: killing the worker would drop the in-memory pipe (at-most-once).
 management:
   endpoints:
     web:
@@ -139,6 +143,8 @@ management:
         include: health,info
   endpoint:
     health:
+      probes:
+        enabled: true
       show-details: when_authorized
       status:
         order: DOWN, OUT_OF_SERVICE, WARN, UP, UNKNOWN
@@ -146,6 +152,19 @@ management:
           DOWN: 200
           OUT_OF_SERVICE: 200
           WARN: 200
+      group:
+        liveness:
+          include: livenessState
+          status:
+            http-mapping:
+              DOWN: 503
+              OUT_OF_SERVICE: 503
+        readiness:
+          include: readinessState,db
+          status:
+            http-mapping:
+              DOWN: 503
+              OUT_OF_SERVICE: 503
 
 ---
 spring:

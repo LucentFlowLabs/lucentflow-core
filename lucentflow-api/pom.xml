@@ -136,6 +136,10 @@
                     <!-- Kill the fork if it takes more than 3 seconds to exit after tests finish -->
                     <forkedProcessExitTimeoutInSeconds>3</forkedProcessExitTimeoutInSeconds>
                     <reuseForks>false</reuseForks> <!-- Cleaner for multi-module async tests -->
+                    <includes>
+                        <include>**/*Test.java</include>
+                        <include>**/*IT.java</include>
+                    </includes>
                 </configuration>
             </plugin>
         </plugins>

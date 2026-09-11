@@ -1,10 +1,10 @@
 # LucentFlow Database Schema (Current)
 
-**Status:** Flyway **V1** baseline plus **V2** plan/quota columns plus **V3** watchlist occupancy.  
+**Status:** Flyway **V1** baseline plus **V2** plan/quota columns plus **V3** watchlist occupancy plus **V4** webhook dead-letter.  
 **Runtime authority:** [`lucentflow-api/src/main/resources/db/migration/`](../../lucentflow-api/src/main/resources/db/migration/)  
 **Docs mirror:** [`schema_current.sql`](schema_current.sql)
 
-Further schema changes: add `V4__...sql` (and refresh this page).
+Further schema changes: add `V5__...sql` (and refresh this page).
 
 ---
 
@@ -16,6 +16,7 @@ Further schema changes: add `V4__...sql` (and refresh this page).
 | Indexer checkpoint | `sync_status` | Singleton row `id = 1` |
 | Tenant configuration | `projects`, `watchlist`, `alert_rules`, `project_api_usage`, `project_watchlist_usage` | B2B isolation |
 | Cluster coordination | `worker_leases`, `api_rate_limit_buckets` | Multi-node lease / rate fairness |
+| Alert delivery | `webhook_dead_letters` | Out-of-process webhook retry after bulkhead saturation |
 
 Tenant **read** isolation for forensics is application-layer: intersect global facts with the project’s `watchlist`. Topology **lookup address** is watchlist-gated; after a hit, returned `funding_edges` are the global graph. Entity tags remain shared intel. Risk Score and the public ETH/USD oracle are not watchlist-gated.
 
@@ -103,6 +104,7 @@ Prefer PostgreSQL `ON CONFLICT` for high-throughput writers:
 | `project_api_usage` | `(project_id, usage_date)` | increment `request_count` if under quota; refund on non-2xx |
 | `api_rate_limit_buckets` | `(bucket_key, epoch_minute)` | increment `request_count` |
 | `worker_leases` | `(lease_name)` | conditional reclaim / renew |
+| `webhook_dead_letters` | `id` (serial) | insert when under capacity; drain `DELETE … RETURNING` + `SKIP LOCKED` |
 
 ### Multi-tenant boundary
 
@@ -225,6 +227,10 @@ Per-project occupancy (`project_id` PK + FK). `WatchlistCapLedger` reserves with
 
 Cluster lease and per-minute rate buckets (no retention job in schema).
 
+### `webhook_dead_letters`
+
+Bulkhead-deferred HMAC webhook deliveries (Flyway **V4**). Payload snapshot is JSONB; `webhook_secret` is **not** stored — drain reloads the current project secret (else the global token). Writer refuses inserts when `COUNT(*)` is at `lucentflow.webhook.dead-letter-capacity` (default 500). A crash after poll and before HTTP success is at-most-once for that batch; unpolled rows survive restart.
+
 ---
 
 ## Known design debt (not changed in V1 squash)
@@ -242,6 +248,6 @@ Cluster lease and per-minute rate buckets (no retention job in schema).
 ## How to use this doc
 
 - **Onboarding / review:** this page + ER diagram.
-- **Apply schema:** Flyway runs `V1__init_schema.sql` then `V2` / `V3` on empty databases.
+- **Apply schema:** Flyway runs `V1__init_schema.sql` then `V2` / `V3` / `V4` on empty databases.
 - **Local demo tenant:** [`demo_setup.sql`](../../lucentflow-api/src/main/resources/db/demo_setup.sql) after migrate.
 - **Evolve:** add `V4__...`, then update this snapshot.

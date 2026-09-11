@@ -68,11 +68,23 @@ http://localhost:8080/swagger-ui/index.html
 }
 ```
 
-If the RPC endpoint is down or times out, `jsonRpc` reports **DOWN** with `rpc` / `error` / `message` details, and the **aggregate JSON** `status` is typically **DOWN**. HTTP status is still **200**: `management.endpoint.health.status.http-mapping` maps `DOWN` / `OUT_OF_SERVICE` to 200 so probes that only inspect the status code keep the process in rotation. Kubernetes readiness/liveness on `/actuator/health` therefore **do not fail** when RPC is down. Operators who need to block traffic must parse the JSON body (or point probes at a check that does). Component details are gated by `show-details: when_authorized`.
+If the RPC endpoint is down or times out, `jsonRpc` reports **DOWN** with `rpc` / `error` / `message` details, and the **aggregate JSON** `status` is typically **DOWN**. HTTP status on **`GET /actuator/health`** is still **200** (`management.endpoint.health.status.http-mapping`) so operator dashboards receive a body they can parse.
+
+**Kubernetes / Compose probes (decided policy):** RPC DOWN must **not** restart the worker (the in-memory `TransactionPipe` is at-most-once) or take API pods out of rotation.
+
+| Probe | Path | Includes | HTTP when down |
+|-------|------|----------|----------------|
+| Liveness | `/actuator/health/liveness` | `livenessState` only | 503 |
+| Readiness | `/actuator/health/readiness` | `readinessState` + `db` | 503 |
+| Operator aggregate | `/actuator/health` | `db`, `jsonRpc`, … | 200 even if `jsonRpc` is DOWN |
+
+Component details on the aggregate endpoint are gated by `show-details: when_authorized`.
 
 **Usage:**
 ```bash
 curl http://localhost:8080/actuator/health
+curl http://localhost:8080/actuator/health/readiness
+curl http://localhost:8080/actuator/health/liveness
 ```
 
 ---

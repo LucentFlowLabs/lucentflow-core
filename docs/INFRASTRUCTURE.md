@@ -165,7 +165,7 @@ healthcheck:
 #### LucentFlow API Health
 ```yaml
 healthcheck:
-  test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1"]
+  test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health/readiness || exit 1"]
   interval: 30s
   timeout: 10s
   retries: 3
@@ -371,7 +371,7 @@ Manifests live under `lucentflow-deployment/k8s/`.
 | `strategy: Recreate` | Avoids two writers during rollouts / lease expiry windows |
 | No worker Service | Only `lucentflow-api` has a ClusterIP |
 | Ingress deny | `networkpolicy.yaml` blocks pod-to-pod access to worker |
-| Probes | Worker readiness/liveness → `/actuator/health` (kubelet; no Service required) |
+| Probes | Worker readiness → `/actuator/health/readiness` (db); liveness → `/actuator/health/liveness` (kubelet; no Service required) |
 
 Do **not** `kubectl scale` the worker or attach an HPA until multi-replica failover is explicitly validated. See `lucentflow-deployment/k8s/README.md`.
 
@@ -426,7 +426,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/actuator/health/readiness || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

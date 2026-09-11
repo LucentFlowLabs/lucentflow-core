@@ -1,9 +1,14 @@
 package com.lucentflow.api.integration;
 
+import com.lucentflow.common.webhook.JdbcWebhookDeadLetterStore;
+import com.lucentflow.common.webhook.WebhookDeadLetterRecord;
+import com.lucentflow.common.webhook.WebhookDeadLetterStore;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationInfo;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -12,11 +17,13 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Applies classpath Flyway V1–V3 (plan/quota + watchlist occupancy) against Postgres 16.
+ * Applies classpath Flyway V1–V4 (plan/quota + watchlist occupancy + webhook dead-letter)
+ * against Postgres 16.
  *
  * @author ArchLucent
  * @since 1.2
@@ -41,18 +48,18 @@ class FlywayMigrationIT {
     }
 
     @Test
-    void migratesV1ThroughV3WatchlistOccupancy() throws Exception {
+    void migratesV1ThroughV4WebhookDeadLetters() throws Exception {
         Flyway flyway = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();
 
         var result = flyway.migrate();
-        assertThat(result.migrationsExecuted).isEqualTo(3);
+        assertThat(result.migrationsExecuted).isEqualTo(4);
 
         MigrationInfo current = flyway.info().current();
         assertThat(current).isNotNull();
-        assertThat(current.getVersion().getVersion()).isEqualTo("3");
+        assertThat(current.getVersion().getVersion()).isEqualTo("4");
 
         try (Connection connection = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {
@@ -71,6 +78,9 @@ class FlywayMigrationIT {
             try (ResultSet rs = connection.getMetaData().getTables(null, null, "project_watchlist_usage", null)) {
                 assertThat(rs.next()).as("project_watchlist_usage exists").isTrue();
             }
+            try (ResultSet rs = connection.getMetaData().getTables(null, null, "webhook_dead_letters", null)) {
+                assertThat(rs.next()).as("webhook_dead_letters exists").isTrue();
+            }
             try (ResultSet rs = connection.getMetaData().getTables(null, null, "worker_leases", null)) {
                 assertThat(rs.next()).as("worker_leases exists").isTrue();
             }
@@ -83,5 +93,42 @@ class FlywayMigrationIT {
                 assertThat(rs.getLong(1)).isEqualTo(0L);
             }
         }
+    }
+
+    @Test
+    void webhookDeadLetterSurvivesNewStoreInstance() {
+        Flyway flyway = Flyway.configure()
+                .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+                .locations("classpath:db/migration")
+                .load();
+        flyway.migrate();
+
+        DriverManagerDataSource dataSource = new DriverManagerDataSource();
+        dataSource.setUrl(POSTGRES.getJdbcUrl());
+        dataSource.setUsername(POSTGRES.getUsername());
+        dataSource.setPassword(POSTGRES.getPassword());
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
+
+        WebhookDeadLetterStore writer = new JdbcWebhookDeadLetterStore(jdbcTemplate, 500);
+        WebhookDeadLetterRecord pending = new WebhookDeadLetterRecord(
+                null,
+                "0xpersist",
+                null,
+                "https://hooks.example/lucentflow",
+                false,
+                null,
+                null,
+                null,
+                "{\"hash\":\"0xpersist\",\"riskScore\":88}",
+                1);
+        assertThat(writer.enqueue(pending)).isTrue();
+        assertThat(writer.size()).isEqualTo(1);
+
+        WebhookDeadLetterStore afterRestart = new JdbcWebhookDeadLetterStore(jdbcTemplate, 500);
+        List<WebhookDeadLetterRecord> claimed = afterRestart.pollDue(16);
+        assertThat(claimed).hasSize(1);
+        assertThat(claimed.getFirst().txHash()).isEqualTo("0xpersist");
+        assertThat(claimed.getFirst().payloadJson()).contains("riskScore");
+        assertThat(afterRestart.size()).isZero();
     }
 }

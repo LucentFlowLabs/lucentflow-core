@@ -8,6 +8,9 @@ All notable changes are tracked here. Format follows [Keep a Changelog](https://
 
 - **Ingest crash semantics** — Checkpoint is enqueue high-water (`last_scanned_block`), not UPSERT completion. Live `TransactionPipe` producers block (no drop). Crash / SIGKILL after checkpoint and before persist is **at-most-once**. Removed the `Drop Rate: 0.00% (zero-loss guarantee)` pipe statistic. Contract: `AGENTS.md`, API `GET /sync-status`, schema notes.
 - **API process does not write ID=1** — Scan stack (`BaseBlockSource`, `RpcConcurrencyGovernor`, …) is `@ConditionalOnIndexerEnabled`. API-only uses `DirectRpcPermitPort` for Genesis Trace RPC.
+- **Webhook dead-letter persistence** — Bulkhead-deferred deliveries land in Flyway **V4** `webhook_dead_letters` (`FOR UPDATE SKIP LOCKED`). Unpolled rows survive worker restart; HMAC secrets are not stored (reloaded from `projects` on drain). Capacity still defaults to 500.
+- **Health probe split** — Kubernetes liveness → `/actuator/health/liveness` (process only). Readiness → `/actuator/health/readiness` (`db` only). `jsonRpc` DOWN stays on the operator aggregate `/actuator/health` (HTTP 200 mapping) and does **not** kick pods. Compose healthcheck uses readiness.
+- **Indexer+analyzer shutdown IT** — `IndexerAnalyzerShutdownIT` stops the producer first (higher SmartLifecycle phase) then last-chance flushes the pipe.
 
 - **Per-project plans** — Flyway `V2__project_plan_quotas.sql`: `plan`, `daily_request_quota` (BUILDER default 2000), `watchlist_limit` (default 50).
 - **Atomic daily quota** — `DailyApiUsageLedger` reserves with `ON CONFLICT … WHERE request_count < quota`; non-2xx responses refund the admit.

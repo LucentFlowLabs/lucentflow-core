@@ -62,6 +62,12 @@ class SingleWriterK8sGateTest {
         assertTrue(workerDoc.contains("--spring.profiles.active=worker"),
                 "worker must use spring.profiles.active=worker");
         assertMatches(workerDoc,
+                "(?m)^[ \\t]+path:\\s*/actuator/health/readiness\\s*$",
+                "worker readinessProbe must use /actuator/health/readiness (db only; not jsonRpc)");
+        assertMatches(workerDoc,
+                "(?m)^[ \\t]+path:\\s*/actuator/health/liveness\\s*$",
+                "worker livenessProbe must use /actuator/health/liveness");
+        assertMatches(workerDoc,
                 "(?m)^[ \\t]+terminationGracePeriodSeconds:\\s*180\\s*$",
                 "worker terminationGracePeriodSeconds must be 180 (pipe drain window)");
         assertMatches(workerDoc,
@@ -118,6 +124,19 @@ class SingleWriterK8sGateTest {
                 "lucentflow-api Service must select component=api");
         assertFalse(hasLabel(svc, "component", "worker"),
                 "lucentflow-api Service must not select component=worker");
+    }
+
+    @Test
+    void apiAndWorkerProbesSplitLivenessFromReadiness() throws IOException {
+        String deployment = read("deployment.yaml");
+        String apiDoc = findDoc(deployment, "Deployment", "lucentflow-api");
+        assertTrue(apiDoc != null, "Missing Deployment lucentflow-api");
+        assertMatches(apiDoc,
+                "(?m)^[ \\t]+path:\\s*/actuator/health/readiness\\s*$",
+                "api readinessProbe must use /actuator/health/readiness");
+        assertMatches(apiDoc,
+                "(?m)^[ \\t]+path:\\s*/actuator/health/liveness\\s*$",
+                "api livenessProbe must use /actuator/health/liveness");
     }
 
     @Test
